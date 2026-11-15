@@ -16,7 +16,7 @@ const nextConfig: NextConfig = {
   // The customer pages carry a link token in the URL fragment and show a third party's job details:
   // keep them out of caches, search indexes and referrers.
   headers: async () => [
-    ...["/signoff", "/signoff/:path*"].map((source) => ({
+    ...["/signoff", "/signoff/:path*", "/invite/:path*", "/auth/:path*"].map((source) => ({
       source,
       headers: [
         { key: "Cache-Control", value: "no-store" },

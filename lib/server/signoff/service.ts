@@ -22,6 +22,16 @@ export async function rpc(name: string, args: Record<string, unknown>): Promise<
   return (data ?? { ok: false, reason: "error" }) as RpcResult;
 }
 
+/** Calls a service-role-only function that returns a plain value (boolean, text, array). */
+export async function rpcValue<T>(name: string, args: Record<string, unknown>): Promise<T | null> {
+  const { data, error } = await createAdminClient().rpc(name, args);
+  if (error) {
+    logSignoffError(`rpc:${name}`, new Error(`code ${error.code}`));
+    return null;
+  }
+  return data as T;
+}
+
 export const off = () => NextResponse.json({ error: { code: "not_found", message: "Not found." } }, { status: 404, headers: NO_STORE });
 export const gone = () =>
   NextResponse.json({ error: { code: "not_found", message: "This link is not valid, or it has expired." } }, { status: 404, headers: NO_STORE });

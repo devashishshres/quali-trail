@@ -13,7 +13,7 @@ end
 $$;
 
 create schema auth;
-create table auth.users (id uuid primary key, email text);
+create table auth.users (id uuid primary key, email text, email_confirmed_at timestamptz);
 
 -- Supabase reads the JWT "sub" claim; tests set it with set_config.
 create function auth.uid() returns uuid language sql stable as $$

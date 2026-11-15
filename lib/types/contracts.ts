@@ -85,6 +85,7 @@ export const ApiError = z.object({
       "extraction_failed",
       "memory_unavailable",
       "rate_limited",
+      "onboarding_required",
       "internal",
     ]),
     message: z.string(),

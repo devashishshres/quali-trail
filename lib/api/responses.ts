@@ -16,6 +16,7 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   extraction_failed: 502,
   memory_unavailable: 503,
   rate_limited: 429,
+  onboarding_required: 403,
   internal: 500,
 };
 

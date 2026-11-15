@@ -1,7 +1,7 @@
 import type { ConfirmEvidenceResponse, ConfirmedEvidenceFields, GateResponse, ListSignoffsResponse, SignoffConfig, SnapshotResponse, CreateSignoffRequest, RespondRequest } from "@/lib/types";
 import { ApiRequestError } from "./errors";
 
-async function call<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+export async function call<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
   const res = await fetch(path, {
     ...init,
     cache: "no-store",
@@ -13,7 +13,7 @@ async function call<T>(path: string, init?: RequestInit, token?: string): Promis
   if (res?.ok && body) return body as T;
   throw new ApiRequestError(body?.error?.code ?? "internal", res?.status ?? 0, body?.error?.message ?? "Can't reach the server. Please try again.", body?.error?.fieldErrors);
 }
-const post = (body?: unknown): RequestInit => ({ method: "POST", ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+export const post = (body?: unknown): RequestInit => ({ method: "POST", ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 
 /** Worker-side calls (signed-in). */
 export const signoffApi = {
