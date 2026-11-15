@@ -109,7 +109,20 @@ private and are counted as "withheld" in the technician's picker, with an honest
    Dry run listed only this file; history matched before and after; the only changed existing objects are the two
    widened email-delivery checks; browser roles are denied on all new tables and functions; demo fingerprints and table
    counts identical.
-2. Controlled Preview test (approved; Preview-only settings, protected Preview, at most seven real emails). Expiry is
-   verified locally with simulated time only, never live.
+2. Done: controlled Preview test, 2026-11-15, on protected Preview deployments (Preview-only settings incl. a separate
+   pepper; sign-up allowlist; Vercel login required). Six real emails (customer invitation, code, receipt; technician
+   notice; two employer invitations, the first to an address the owner then replaced, withdrawn unopened).
+   Records created under the fictional test technician: one job, one uploaded certificate, one customer request, two
+   shares. One no-role account created for the unrelated-account check; the +sup test account's password was reset by
+   admin (no email). Results: customer acknowledgment wording unchanged and the separate permission recorded only when
+   ticked; packet held exactly the two selected items and no customer name, signature, comment or contact details;
+   technician's own account refused ("own packet"); unrelated account refused and never bound; reviewer opened the
+   packet and the certificate original; work document refused server-side; withdrawal ended packet (410) and
+   certificate (404) access; access log complete. Not tested live: supervisor permission (email budget), expiry
+   (simulated locally only).
+   Bug found and fixed: returning to the window logged two "viewed" events (focus + visibilitychange both refetched).
+   Fixed in d00634a and verified on the Preview (1 packet fetch after three window returns, previously 4). The live
+   test share's existing log was left as recorded (8 "viewed" entries for about five page loads).
+   Preview employer flag set back to false afterwards.
 3. Conditional merge with `EMPLOYER_REVIEW_ENABLED=false` in Production (approved only if step 2 passes).
 4. Not approved yet: enabling employer sharing in Production.
