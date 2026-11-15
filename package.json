@@ -10,6 +10,8 @@
     "test": "vitest run",
     "test:db": "TEST_DATABASE_ADMIN_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres vitest run tests/db",
     "seed:demo": "tsx --env-file=.env.local supabase/seed/seed-demo.ts",
+    "seed:index": "tsx --env-file=.env.local supabase/seed/index-demo.ts",
+    "seed:pdfs": "tsx supabase/seed/make-demo-pdfs.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

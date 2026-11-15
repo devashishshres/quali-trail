@@ -143,7 +143,7 @@ function Contribution({ c, active, onSelect }: { c: EvidenceConnection; active: 
         <span>{formatDate(c.evidenceDate)}</span>
         <span>{TYPE_LABEL[c.evidenceType]}</span>
         <span className="font-medium text-navy">{c.role === "direct" ? "Could satisfy on its own" : "Related, partial"}</span>
-        {c.memorySimilarity !== null && <span>Found by memory search ({Math.round(c.memorySimilarity * 100)}% match)</span>}
+        {c.memorySimilarity !== null && <span>Retrieval similarity: {Math.round(c.memorySimilarity * 100)}%</span>}
       </p>
       <p className="mt-2 text-sm">{c.contribution}</p>
       <p className="mt-1 text-sm text-slate">{c.relevanceExplanation}</p>

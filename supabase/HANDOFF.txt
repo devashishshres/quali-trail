@@ -1,0 +1,92 @@
+QUALITRAIL — OUR VERSION HANDOFF
+================================
+
+
+Verified November 14, 2026, America/Phoenix. Branch: `our-version` in `/Users/tharunvimalaa/sun-hacks-26`.
+
+## Result
+
+The core live workflow is working with fixture mode off:
+
+Sign in → view historical evidence → match the seeded job → upload the fictional commissioning PDF → real Gemini extraction → edit the review → confirm → private storage → completed Supermemory indexing → rerun matching → saved qualification report → print preview.
+
+Safari is left signed in on Opportunities with the commissioning requirement selected. The temporary test browser was closed.
+
+## Separate development services
+
+- Created the `QualiTrail Development` organization on the displayed Free plan.
+- User created the project and chose its database password. Project reference: `ighnwgkqvajfkhmopttg`.
+- Installed all four repository migrations in the new empty project through the SQL editor in a transaction. The dashboard reported success.
+- Updated the ignored local environment file to use that project's URL and keys. No credential file was committed.
+- Added the opt-in namespace prefix `qualitrail_our_version_`. Ingestion and retrieval now use `qualitrail_our_version_worker_<worker UUID>`, keeping this version's memories separate from the partner's existing namespace.
+- Seeded Alex Morgan, four historical evidence records, two original PDFs, one fictional job and four requirements. The browser test added a fifth evidence record with a third original PDF.
+- All five records completed real provider indexing.
+- The original Gemini model repeatedly timed out. A live-verified available model, `gemini-3.1-flash-lite`, now provides extraction through the local configuration. The actual checklist PDF produced structured fields successfully.
+
+## Fixes made
+
+- Prevented an older indexing response from changing a newer evidence version's status.
+- Protected draft provenance against direct authenticated-client writes; API routes use the server client only after authenticating the worker.
+- Added report invalidation for source-provenance changes and transitions out of indexed state.
+- Stopped empty stale attempts from becoming the latest report or comparison baseline.
+- Preserved database timestamp precision for previous-run lookup.
+- Validated finalization responses and stopped ignoring failure-operation errors.
+- Made duplicate uploads link to the saved record without offering an unsaveable confirmation form.
+- Cleared rejected replacement files and blocked changing capture modes during extraction.
+- Preserved a manual-text summary when extraction fails and improved fallback/save messages.
+- Kept uploads made by the fictional demo worker labeled synthetic.
+- Added client-side extraction deadlines/cancellation and reduced excessive waiting. Cancellation does not guarantee that a provider has stopped server-side work; see the [SDK documentation](https://googleapis.github.io/js-genai/release_docs/interfaces/types.GenerateContentConfig.html).
+- Recovered sign-in busy/error states, hardened return-path handling and removed a misleading hardcoded demo email.
+- Refreshed loaded data when returning to the app/tab.
+- Replaced percentage “match” wording with retrieval similarity.
+- Fixed a live-discovered false positive: a commissioning checklist title mentioning “install” no longer proves that both installation and startup were performed. Explicit activities must support that requirement. The incorrect fictional QA run was retained as failed/superseded.
+
+## Live before/after result
+
+| Requirement | Before checklist | After checklist |
+|---|---|---|
+| EPA 608 credential | Evidence found | Evidence found |
+| Manufacturer training | Evidence found | Evidence found |
+| Documented installation and startup | Needs review | Needs review |
+| Completed commissioning checklist | No sufficient evidence | Evidence found |
+
+The final packet has three requirements with evidence found and one needing review. Supplied documents remain labeled as supplied, not independently verified.
+
+Before rerunning, the old packet correctly became stale, showed a printable warning and disabled the app's print button. The new run persisted, and the report reopened successfully after refresh. The print action rechecked freshness and opened print preview; the preview was dismissed rather than sending anything to a printer.
+
+## Verification
+
+- Full suite: **147 tests passed, 0 skipped** (113 unit + 34 database tests against a disposable local PostgreSQL 16). Without TEST_DATABASE_ADMIN_URL the 34 database tests are skipped (113 pass).
+- Typecheck and lint: clean.
+- Production build: passed, including TypeScript checking.
+- Lint: passed.
+- Signed-out API requests returned 401.
+- Invalid match input returned 400; unknown evidence returned 404.
+- A fake PDF with a PDF filename/MIME type returned 415.
+- All three original-file signed URLs returned real PDF bytes successfully; signed URLs were not included in this report.
+- Uploading the saved checklist again was detected as a duplicate.
+- Real Supabase persistence, Supermemory retrieval/indexing, and Gemini PDF extraction were exercised.
+- Sign-out and a fresh sign-in were exercised. Saved evidence and qualification results remained available.
+- Mobile and desktop layouts were visually inspected in the test browser; Safari's live results were verified separately.
+
+## Handoff and limits
+
+Changes are committed locally on `our-version`. Nothing was pushed to GitHub, merged to main or deployed.
+
+This is the core hackathon MVP: a provisioned demo account and seeded opportunity. TinyFish import, Copilot, Maritime and Grok Bot were not added. Real-provider outage/retry behavior has not been exhaustively failure-injected, and this is not a production security certification.
+
+The migrations were applied through the SQL editor, so CLI migration-history bookkeeping was not automatically populated. Reconcile that history before a future `supabase db push`; do not blindly replay the initial schema against the populated project.
+
+The demo account is `alex.morgan@demo.qualitrail.dev`; its password remains in local configuration. The service keys previously pasted into chat should be replaced through their providers, then updated locally. Do not commit them.
+
+
+AUTOMATIC GEMINI FAILOVER
+-------------------------
+GEMINI_MODEL remains the primary. On a model timeout/temporary unavailability,
+extraction tries GEMINI_FALLBACK_MODELS (comma-separated) in order. If unset,
+the defaults are gemini-2.5-flash-lite,gemini-2.5-flash. An empty value disables
+backups. Names are deduplicated and at most three models total are attempted,
+with a 15-second client deadline each. Invalid credentials/input and malformed
+output do not trigger model hopping. Exhausted models retain manual review.
+SDK retries are disabled so a slow model cannot consume the fallback window.
+Client cancellation does not guarantee provider-side cancellation or no charge.

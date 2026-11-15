@@ -46,8 +46,10 @@ async function main() {
   // 1. Demo auth user
   const password = requireEnv("DEMO_USER_PASSWORD");
   let authUserId: string;
+  // DEMO_USER_EMAIL may be set in .env.local when the account already exists under another address.
+  const demoEmail = process.env.DEMO_USER_EMAIL ?? DEMO_USER_EMAIL;
   const created = await supabase.auth.admin.createUser({
-    email: DEMO_USER_EMAIL,
+    email: demoEmail,
     password,
     email_confirm: true,
   });
@@ -56,7 +58,7 @@ async function main() {
   } else {
     const { data, error } = await supabase.auth.admin.listUsers({ perPage: 1000 });
     if (error) throw error;
-    const existing = data.users.find((u) => u.email === DEMO_USER_EMAIL);
+    const existing = data.users.find((u) => u.email === demoEmail);
     if (!existing) throw created.error ?? new Error("Could not create or find demo user");
     authUserId = existing.id;
   }

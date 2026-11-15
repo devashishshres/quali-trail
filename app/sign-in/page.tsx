@@ -14,15 +14,20 @@ export default function SignInPage() {
     const form = new FormData(e.currentTarget);
     setBusy(true);
     setError(null);
-    const { error } = await createBrowserSupabase().auth.signInWithPassword({
-      email: String(form.get("email")),
-      password: String(form.get("password")),
-    });
-    setBusy(false);
-    if (error) return setError(error.message);
-    const next = new URLSearchParams(window.location.search).get("next");
-    // Only same-site paths: never redirect to another origin.
-    window.location.assign(next?.startsWith("/") && !next.startsWith("//") ? next : "/passport");
+    try {
+      const { error } = await createBrowserSupabase().auth.signInWithPassword({
+        email: String(form.get("email")),
+        password: String(form.get("password")),
+      });
+      if (error) return setError("Sign-in failed. Check your email and password and try again.");
+      const next = new URLSearchParams(window.location.search).get("next");
+      const destination = next ? new URL(next, window.location.origin) : null;
+      window.location.assign(destination?.origin === window.location.origin ? destination.pathname + destination.search + destination.hash : "/passport");
+    } catch {
+      setError("Couldn't connect to sign-in. Please try again.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -70,10 +75,7 @@ export default function SignInPage() {
               <button className="btn btn-primary w-full" disabled={busy}>
                 {busy ? "Signing in…" : "Sign in"}
               </button>
-              <p className="text-sm text-slate">
-                Demo account: <span className="font-medium text-navy">alex.morgan@demo.qualitrail.dev</span>. The password is
-                DEMO_USER_PASSWORD from your seed environment.
-              </p>
+              <p className="text-sm text-slate">Use the demo account provided by your project owner.</p>
             </form>
           )}
         </div>
