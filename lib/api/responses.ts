@@ -1,5 +1,6 @@
 import "server-only";
 import { NextResponse } from "next/server";
+import type { z } from "zod";
 import type { ApiError } from "../types";
 
 type ErrorCode = ApiError["error"]["code"];
@@ -32,4 +33,18 @@ export function apiError(
 
 export function ok<T>(body: T, status = 200): NextResponse<T> {
   return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
+}
+
+/**
+ * Zod issues -> `{ "fields.title": ["…"] }`, the keys the review form reads.
+ * Array indexes are dropped so a bad list item lands on the list's input.
+ * (zod's flatten() keeps only the top-level key, which loses the field.)
+ */
+export function fieldErrors(error: z.ZodError): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const issue of error.issues) {
+    const key = issue.path.filter((p) => typeof p !== "number").join(".") || "body";
+    (out[key] ??= []).push(issue.message);
+  }
+  return out;
 }

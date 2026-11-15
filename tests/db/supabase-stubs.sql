@@ -2,12 +2,13 @@
 -- migrations depend on, so they can run on plain PostgreSQL in CI.
 -- Never apply this to a real Supabase project.
 
--- Roles are cluster-wide, so create them only once.
+-- Roles are cluster-wide and the DB test files run in parallel, so two files
+-- can race to create them on a fresh server: treat "already exists" as done.
 do $$
 begin
-  if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
-  if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
-  if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
+  begin create role anon nologin; exception when duplicate_object or unique_violation then null; end;
+  begin create role authenticated nologin; exception when duplicate_object or unique_violation then null; end;
+  begin create role service_role nologin bypassrls; exception when duplicate_object or unique_violation then null; end;
 end
 $$;
 

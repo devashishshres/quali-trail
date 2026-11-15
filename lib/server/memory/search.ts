@@ -1,11 +1,7 @@
 import "server-only";
 import { memoryNamespace, parseHitMetadata } from "./conventions";
 import { getMemoryClient } from "./client";
-
 import { MemorySearchError, type MemoryHit, type MemorySearcher } from "./types";
-
-export { MemorySearchError };
-export type { MemoryHit, MemorySearcher };
 
 /**
  * Search ONE worker's namespace. Hits that are malformed, claim another

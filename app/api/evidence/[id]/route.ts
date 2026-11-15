@@ -34,8 +34,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
     let documentUrl: string | null = null;
     if (fresh.storage_path) {
-      const { data } = await ctx.supabase.storage.from("evidence").createSignedUrl(fresh.storage_path, SIGNED_URL_SECONDS);
-      documentUrl = data?.signedUrl ?? null;
+      const { data, error: signError } = await ctx.supabase.storage.from("evidence").createSignedUrl(fresh.storage_path, SIGNED_URL_SECONDS);
+      // An original exists: failing to sign it is an error, not "no file".
+      if (signError || !data) return apiError("internal", "The original document couldn't be opened. Please try again.");
+      documentUrl = data.signedUrl;
     }
     const body: GetEvidenceResponse = { evidence: toEvidence(fresh), documentUrl };
     return ok(body);

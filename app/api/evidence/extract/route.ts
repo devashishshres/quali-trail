@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getAuthedContext } from "@/lib/api/auth";
-import { apiError, ok } from "@/lib/api/responses";
+import { apiError, fieldErrors, ok } from "@/lib/api/responses";
 import { ExtractionError, extractFromPdf, extractFromText } from "@/lib/server/extraction/gemini";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { cleanupAbandonedDrafts } from "@/lib/server/evidence/drafts";
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
   } else {
     const parsed = ExtractTextRequest.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      return apiError("validation_failed", "Describe the work in at least 20 characters (10,000 max).", parsed.error.flatten().fieldErrors as Record<string, string[]>);
+      return apiError("validation_failed", "Describe the work in at least 20 characters (10,000 max).", fieldErrors(parsed.error));
     }
     sourceKind = "manual_text";
     text = parsed.data.text;

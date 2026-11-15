@@ -3,8 +3,8 @@
  * from `lib/types` — the frontend never invents its own shapes.
  *
  * NEXT_PUBLIC_DATA_MODE=fixtures swaps in labelled sample data
- * (lib/client/fixtures.ts) so the UI works before every backend route
- * exists. The shell shows a permanent banner while fixtures are on.
+ * (lib/client/fixtures.ts) so the UI works without any backend services.
+ * The shell shows a permanent banner while fixtures are on.
  */
 import type {
   ApiError,

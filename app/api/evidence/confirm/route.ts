@@ -1,5 +1,5 @@
 import { getAuthedContext } from "@/lib/api/auth";
-import { apiError, ok } from "@/lib/api/responses";
+import { apiError, fieldErrors, ok } from "@/lib/api/responses";
 import { indexEvidence } from "@/lib/server/memory/indexing";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { EVIDENCE_COLUMNS, toEvidence, type EvidenceRow } from "@/lib/supabase/mappers";
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
 
   const body = ConfirmEvidenceRequest.safeParse(await request.json().catch(() => null));
   if (!body.success) {
-    return apiError("validation_failed", "Check the highlighted fields.", body.error.flatten().fieldErrors as Record<string, string[]>);
+    return apiError("validation_failed", "Check the highlighted fields.", fieldErrors(body.error));
   }
   const { draftId, fields } = body.data;
 
