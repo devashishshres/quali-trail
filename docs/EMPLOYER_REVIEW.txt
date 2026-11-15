@@ -1,0 +1,79 @@
+# Employer review portal: design and handoff
+
+Status: built on `feature/employer-review` behind `EMPLOYER_REVIEW_ENABLED` (off by default). Not applied to any hosted
+database, not deployed, no real email sent.
+
+## Intent
+
+A technician shares a selected job report, the records behind it and their completed confirmations with **one**
+employer-reviewer email address. The reviewer proves they control that address by signing in with it (confirmed email)
+and sees a read-only, immutable, expiring, revocable packet. That proves control of an inbox and nothing more: it is never
+described as verified identity, employment or authority.
+
+## Non-goals and anti-goals
+
+No candidate search, messaging, hiring decisions, automatic applications or contacting verifiers. No broad employer access
+to worker tables. No change to TinyFish, matching results, verification statuses, the worker sign-up policy or live
+feature settings. No retroactive consent.
+
+## Approaches considered
+
+1. **Frozen packet copy, account-based recipient (chosen).** At share time the server builds the packet from the
+   technician's own data and stores it immutably with a SHA-256 hash. The reviewer signs in with the invited address.
+   Mirrors the supervisor-invitation pattern already in the codebase, so a forwarded link cannot open the packet for any
+   other account and nothing in the reviewer's session can reach worker tables.
+2. Live view over worker tables with a scoped grant. Rejected: needs new RLS paths for employers and the packet would
+   change under the reviewer.
+3. Email one-time code without an account (the customer sign-off pattern). Rejected: the request was framed around
+   accounts ("a forwarded link must not grant access to a different account"), and an account gives a stable list of
+   received packets and clean revocation.
+
+## How it works
+
+- **Database** (`supabase/migrations/20261120100000_employer_review.sql`, additive): `employer_shares` (frozen packet,
+  hash, shared record versions and file hashes, invited address until used, token hash, status, reviewer account, expiry),
+  `employer_share_events` (append-only: invited, accepted, viewed, original_opened, revoked, expired; never tokens or
+  URLs), `review_share_consents` (insert-only). RLS on, all client privileges revoked; only service-role functions touch
+  them, each checking the caller. Email-delivery checks are replaced by supersets adding the new kind and related type.
+- **Packet builder** (`lib/server/employer/packet.ts`): one function used for the preview and the stored copy. It
+  excludes free-text summaries, credential numbers, AI explanations and narrative, customer names/addresses/signatures/
+  comments, supervisor comments and addresses, and unselected records (counted as "not shared" per requirement). Only a
+  current (not stale) report can be shared. Only confirmations for the record's current version are included.
+- **Consent.** Existing confirmations keep their meaning and never show names to employers. New supervisor confirmations
+  (flag on) offer an optional, unticked checkbox to allow name/organization/title to be shown; recorded only by that
+  reviewer, only for a confirmation, only within 15 minutes of deciding. Customers are never named; while the flag is on,
+  new customer acknowledgments use `customer-ack-v2`, which adds a notice that the acknowledgment may be shared without
+  their name or contact details (the page echoes the version it showed).
+- **Access.** Accept requires the token and a signed-in account whose confirmed email equals the invited address; the
+  technician's own account is refused. Opening creates no profile and no supervisor relationship. An address with a
+  pending share may register an account (like a supervisor invitation) but still cannot create a technician or reviewer
+  profile under the sign-up policy. `/employer` pages are reachable by any signed-in account and every API call checks the
+  share's recipient.
+- **Originals** open through a 60-second signed URL only if that original was explicitly shared in this packet, the share
+  is active, and the record is still the shared version and file. The URL is returned to the caller only.
+- **Changes after sharing** are shown as a notice; the packet itself never changes.
+- **Technician UI**: "Share with an employer" on Reports (choose records, originals, confirmations, expiry 3/7/14/30 days),
+  mandatory preview with the same component the reviewer sees, a reviewed-it checkbox, then send. Shares list shows masked
+  address, status, views, originals opened, and Withdraw.
+
+## Verification done (isolated local only)
+
+- Unit and database tests: `tests/employer/*.test.ts`, `tests/db/employer.test.ts`; full suite 677/677.
+- Browser journeys: `scripts/e2e-employer.mjs` 31/31 (flag on, mock email); existing `scripts/e2e-local.mjs` 95/95 with
+  the employer flag off.
+
+## Calls made by the builder (please check)
+
+- Anonymous existence of an older (v1) confirmation is shown to employers ("a customer acknowledged…", "a supervisor
+  (details not shared) confirmed…"), without names. If you want v1 confirmations excluded entirely, it is a one-line
+  change in `confirmationsFor`.
+- Supervisor consent can only be given at decision time, not later for older reviews.
+- Masked address hints keep the domain (same as supervisor invitations).
+- Issuer and the record's structured activity/equipment/skill lists are shared; free-text summary is not.
+- Default expiry 7 days, maximum 30; 10 shares/hour and 20/day per technician.
+
+## Release steps (each needs separate approval)
+
+1. Apply the migration to the hosted database.
+2. Set `EMPLOYER_REVIEW_ENABLED=true` (Preview first) and run a live test with fictional identities and real email.
+3. Merge and deploy.

@@ -1,6 +1,7 @@
 import { apiError, fieldErrors, ok } from "@/lib/api/responses";
 import { mayRegister, safeNext } from "@/lib/server/accounts/policy";
 import { hasPendingInvite } from "@/lib/server/accounts/roles";
+import { hasPendingEmployerShare } from "@/lib/server/employer/service";
 import { configProblems, describeProblems } from "@/lib/server/config";
 import { allow, clientIp, guarded } from "@/lib/server/signoff/service";
 import { logSignoffError } from "@/lib/server/signoff/redact";
@@ -26,7 +27,10 @@ async function handlePOST(request: Request) {
 
   const { email, password } = body.data;
   if (!(await allow("signup-email", email, 3600, 5))) return ok({ message: SENT });
-  if (!mayRegister(email, await hasPendingInvite(email))) return ok({ message: SENT });
+  // An open supervisor invitation or employer share lets that address register. Neither leads to a technician
+  // profile (onboarding still applies the sign-up policy), and an employer share leads to no profile at all.
+  const invited = (await hasPendingInvite(email)) || (await hasPendingEmployerShare(email));
+  if (!mayRegister(email, invited)) return ok({ message: SENT });
 
   const base = (process.env.APP_BASE_URL ?? new URL(request.url).origin).replace(/\/+$/, "");
   const next = safeNext(body.data.next, "/onboarding");

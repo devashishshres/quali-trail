@@ -85,7 +85,7 @@ export default function SignoffPage() {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
     return run(async () => {
-      if (mode === "confirm") await customerApi.respond(t(), { decision: "confirm", typedName: String(f.get("name") ?? ""), agreed: true });
+      if (mode === "confirm") await customerApi.respond(t(), { decision: "confirm", typedName: String(f.get("name") ?? ""), agreed: true, statementVersion: snap?.statementVersion });
       else if (mode === "request_correction") await customerApi.respond(t(), { decision: "request_correction", comment: String(f.get("comment") ?? "") });
       else await customerApi.respond(t(), { decision: "decline" });
       try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ }

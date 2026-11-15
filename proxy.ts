@@ -75,7 +75,8 @@ export async function proxy(request: NextRequest) {
   }
 
   // Customer and invitation pages, the email-link callback, password reset and onboarding work for anyone signed in.
-  if (startsWithAny(path, ["/signoff", "/invite/", "/auth/", "/onboarding", "/forgot-password", "/reset-password"])) return response;
+  // So do shared employer packets: each page and API call there checks the share's recipient itself.
+  if (startsWithAny(path, ["/signoff", "/invite/", "/auth/", "/onboarding", "/forgot-password", "/reset-password", "/employer"])) return response;
 
   const [w, s] = await Promise.all([
     supabase.from("workers").select("id").eq("auth_user_id", data.user.id).maybeSingle(),

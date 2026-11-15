@@ -1,4 +1,5 @@
-import { STATEMENT_VERSION } from "@/lib/server/signoff/statement";
+import { recordedStatementVersion } from "@/lib/server/signoff/statement";
+import { employerReviewEnabled } from "@/lib/server/employer/flags";
 import { notifyCustomerDecision } from "@/lib/server/signoff/notify";
 import { logSignoffError } from "@/lib/server/signoff/redact";
 import { allow, clientIp, featureOn, gone, guarded, json, off, rpc, sessionHash, tokenHash, tooMany } from "@/lib/server/signoff/service";
@@ -27,7 +28,7 @@ async function handlePOST(request: Request) {
     p_decision: d.decision,
     p_typed_name: d.decision === "confirm" ? d.typedName : null,
     p_comment: d.decision === "request_correction" ? d.comment : null,
-    p_statement_version: STATEMENT_VERSION,
+    p_statement_version: recordedStatementVersion(d.decision === "confirm" ? d.statementVersion : undefined, employerReviewEnabled()),
   });
   if (r.ok) {
     if (r.repeated !== true) {

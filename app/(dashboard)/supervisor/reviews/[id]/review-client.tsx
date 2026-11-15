@@ -52,8 +52,9 @@ export function ReviewClient() {
     setBusy(true);
     setMessage(null);
     try {
-      if (decision === "confirm_observed") await accountsApi.respond(id, { decision, observedTasks: f.getAll("task").map(String), comment, agreed: true });
-      else if (decision === "confirm_documents_reviewed") await accountsApi.respond(id, { decision, comment, agreed: true });
+      const shareWithEmployers = f.get("shareWithEmployers") === "yes";
+      if (decision === "confirm_observed") await accountsApi.respond(id, { decision, observedTasks: f.getAll("task").map(String), comment, agreed: true, shareWithEmployers });
+      else if (decision === "confirm_documents_reviewed") await accountsApi.respond(id, { decision, comment, agreed: true, shareWithEmployers });
       else if (decision === "request_correction") await accountsApi.respond(id, { decision, comment: comment ?? "" });
       else if (decision === "decline") await accountsApi.respond(id, { decision, comment });
       setDone(true);
@@ -112,6 +113,12 @@ export function ReviewClient() {
               </fieldset>
             )}
             {decision === "confirm_documents_reviewed" && <label className="flex gap-2 rounded-md bg-paper p-3 text-sm"><input type="checkbox" required /> {statements.documents}</label>}
+            {statements.shareConsent && (decision === "confirm_observed" || decision === "confirm_documents_reviewed") && (
+              <label className="flex gap-2 rounded-md border border-line p-3 text-sm">
+                <input type="checkbox" name="shareWithEmployers" value="yes" />
+                <span><span className="block font-semibold">Optional: let employers see who confirmed this</span>{statements.shareConsent}</span>
+              </label>
+            )}
             {decision && (
               <label className="block"><span className="mb-1 block text-sm font-semibold">{decision === "request_correction" ? "What should be corrected?" : "Comment (optional)"}</span>
                 <textarea name="comment" className="field" rows={3} maxLength={2000} required={decision === "request_correction"} />

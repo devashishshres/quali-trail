@@ -3,6 +3,7 @@ import { getSupervisorContext } from "@/lib/api/auth";
 import { apiError, ok } from "@/lib/api/responses";
 import { DOCUMENTS_STATEMENT, OBSERVED_STATEMENT } from "@/lib/server/accounts/review-text";
 import { rpc } from "@/lib/server/signoff/service";
+import { employerReviewEnabled, SHARE_CONSENT_TEXT } from "@/lib/server/employer/flags";
 
 /**
  * GET /api/supervisor/reviews/:id — read only. Visible only to the addressed supervisor while the relationship
@@ -17,5 +18,5 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!r.ok) return apiError("not_found", "That review isn't available to you.");
   const { ok: _ok, ...review } = r;
   void _ok;
-  return ok({ review, statements: { observed: OBSERVED_STATEMENT, documents: DOCUMENTS_STATEMENT } });
+  return ok({ review, statements: { observed: OBSERVED_STATEMENT, documents: DOCUMENTS_STATEMENT, shareConsent: employerReviewEnabled() ? SHARE_CONSENT_TEXT : null } });
 }

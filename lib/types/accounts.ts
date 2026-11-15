@@ -40,7 +40,7 @@ export const MeResponse = z.object({
   /** A technician profile is possible only under the sign-up policy (never by invitation alone). */
   canOnboardWorker: z.boolean(),
   canOnboardSupervisor: z.boolean(),
-  features: z.object({ customerSignoff: z.boolean(), supervisorReview: z.boolean(), jobImport: z.boolean().default(false), aiExplanations: z.boolean().default(false) }),
+  features: z.object({ customerSignoff: z.boolean(), supervisorReview: z.boolean(), jobImport: z.boolean().default(false), aiExplanations: z.boolean().default(false), employerReview: z.boolean().default(false) }),
 });
 export type MeResponse = z.infer<typeof MeResponse>;
 
@@ -93,8 +93,10 @@ export const SupervisorReview = z.object({
 export type SupervisorReview = z.infer<typeof SupervisorReview>;
 
 export const ReviewRespondRequest = z.discriminatedUnion("decision", [
-  z.object({ decision: z.literal("confirm_observed"), observedTasks: z.array(z.string().max(500)).min(1).max(50), comment: z.string().trim().max(2000).nullable().optional(), agreed: z.literal(true) }),
-  z.object({ decision: z.literal("confirm_documents_reviewed"), comment: z.string().trim().max(2000).nullable().optional(), agreed: z.literal(true) }),
+  // shareWithEmployers: the reviewer's explicit, optional permission to show their name with this confirmation in
+  // packets the technician shares with employers. Absent or false means employers never see their details.
+  z.object({ decision: z.literal("confirm_observed"), observedTasks: z.array(z.string().max(500)).min(1).max(50), comment: z.string().trim().max(2000).nullable().optional(), agreed: z.literal(true), shareWithEmployers: z.boolean().optional() }),
+  z.object({ decision: z.literal("confirm_documents_reviewed"), comment: z.string().trim().max(2000).nullable().optional(), agreed: z.literal(true), shareWithEmployers: z.boolean().optional() }),
   z.object({ decision: z.literal("request_correction"), comment: z.string().trim().min(1).max(2000) }),
   z.object({ decision: z.literal("decline"), comment: z.string().trim().max(2000).nullable().optional() }),
 ]);

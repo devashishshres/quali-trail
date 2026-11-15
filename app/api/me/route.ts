@@ -6,6 +6,7 @@ import { configProblems } from "@/lib/server/config";
 import { importConfigProblems, importEnabled } from "@/lib/server/imports/config";
 import { explanationsAvailable } from "@/lib/server/explanations/config";
 import { signoffEnabled } from "@/lib/server/signoff/config";
+import { employerReviewEnabled } from "@/lib/server/employer/flags";
 import type { MeResponse } from "@/lib/types";
 
 /** GET /api/me — the caller's own roles, and which profiles they may still create. Never anyone else's. */
@@ -22,6 +23,6 @@ export async function GET() {
     canOnboard: may.worker || may.supervisor,
     canOnboardWorker: may.worker,
     canOnboardSupervisor: may.supervisor,
-    features: { customerSignoff: signoffEnabled(), supervisorReview: supervisorReviewEnabled(), jobImport: importEnabled() && importConfigProblems().length === 0, aiExplanations: explanationsAvailable() },
+    features: { customerSignoff: signoffEnabled(), supervisorReview: supervisorReviewEnabled(), jobImport: importEnabled() && importConfigProblems().length === 0, aiExplanations: explanationsAvailable(), employerReview: employerReviewEnabled() },
   });
 }

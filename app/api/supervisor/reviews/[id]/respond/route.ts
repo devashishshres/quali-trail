@@ -7,6 +7,7 @@ import { REVIEW_STATEMENT_VERSION } from "@/lib/server/accounts/review-text";
 import { logSignoffError } from "@/lib/server/signoff/redact";
 import { allow, guarded, rpc } from "@/lib/server/signoff/service";
 import { ReviewRespondRequest } from "@/lib/types";
+import { employerReviewEnabled, SHARE_CONSENT_VERSION } from "@/lib/server/employer/flags";
 
 const MESSAGE: Record<string, string> = {
   tasks_required: "Select at least one task you personally observed.",
@@ -44,10 +45,17 @@ async function handlePOST(request: Request, { params }: { params: Promise<{ id: 
     if (r.reason === "not_found") return apiError("not_found", "That review isn't available to you.");
     return apiError("forbidden", MESSAGE[String(r.reason)] ?? "This request is no longer open.");
   }
+  // Separate, optional and prospective: only when the reviewer ticked it now. If recording it fails, the review stands
+  // and employers simply don't see the reviewer's details.
+  let shareConsent = false;
+  if (employerReviewEnabled() && "shareWithEmployers" in d && d.shareWithEmployers === true) {
+    const c = await rpc("review_record_share_consent", { p_auth: s.user.id, p_request: id.data, p_consent_version: SHARE_CONSENT_VERSION });
+    shareConsent = c.ok === true;
+  }
   if (r.repeated !== true) {
     await notifyReviewDecided({ requestId: id.data, workerId: String(r.workerId), status: String(r.status), title: String(r.title) }).catch((e) => logSignoffError("review-notice", e));
   }
-  return ok({ recorded: true, repeated: r.repeated === true, status: r.status });
+  return ok({ recorded: true, repeated: r.repeated === true, status: r.status, shareConsent });
 }
 
 export const POST = guarded(handlePOST);
