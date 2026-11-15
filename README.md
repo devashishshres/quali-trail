@@ -50,7 +50,7 @@ By default extraction tries `gemini-3.5-flash-lite`, then `gemini-3.5-flash`, th
 
 ### Database
 
-Five SQL files in `supabase/migrations/`, applied in filename order:
+Six SQL files in `supabase/migrations/`, applied in filename order:
 
 | File | Purpose |
 |---|---|
@@ -59,6 +59,7 @@ Five SQL files in `supabase/migrations/`, applied in filename order:
 | `20261114180000_match_run_functions.sql` | Atomic match-run start/finalize/fail (service role only), privilege hardening |
 | `20261114210000_evidence_integrity.sql` | Draft protections, provenance-aware versioning, staleness on leaving indexed |
 | `20261115120000_worker_summary.sql` | Optional `workers.summary` (additive, nullable) |
+| `20261116100000_customer_signoff.sql` | Customer sign-off tables and service-role functions (additive; see below). **Not applied to any shared project yet.** |
 
 The summary migration is optional for the app to run: if the column is absent the summary simply does not show, and sign-in and matching are unaffected. Apply it before seeding a synthetic worker, which writes a summary.
 
@@ -129,6 +130,28 @@ docker rm -f qualitrail-test-pg
 
 Without `TEST_DATABASE_ADMIN_URL` the database tests are skipped, not failed.
 
+## Customer sign-off (Phase 1, behind a flag)
+
+A technician can ask a customer to acknowledge **one saved work record or checklist**. Scope in this phase: work records and checklists only; customer role only (no supervisor); records that are *self-reported* or *document supplied* (anything pending review, independently confirmed, or expired is refused).
+
+**What an acknowledgment means.** The customer received a code at the address *the worker provided*, entered it, and acknowledged a snapshot of the record. It does **not** verify the customer's identity or the work, and it never changes a record's verification label. The label reads: *"Customer acknowledged on <date>. A code sent to the email address the worker provided was entered. Neither the customer's identity nor the work is independently verified."* A link alone never produces an acknowledgment. Simulated delivery is always labelled *"Simulated (no real email was sent)"* and is never described as verification.
+
+**Flow.** The invitation link is `APP_BASE_URL/signoff#t=<token>`. The token is in the URL fragment, so it is not sent to servers, logs or referrers; the page removes it from the address bar and sends it in a header. The link opens a minimal gate page (the worker's name and a masked address). Details appear only after the customer enters a single-use 6-digit code. Reissuing a code invalidates earlier ones; 5 tries per code, 3 codes per 24 hours, and the request locks after 10 failures. A correct code creates a 30-minute HttpOnly session bound to that one invitation. A decision is recorded in one database transaction that re-checks session, expiry, invitation status and the record's version; concurrent or repeated submissions produce at most one response.
+
+**Editing.** `PATCH /api/evidence/:id` edits title, date, issuer and details of a work record or checklist. It cannot change the type or the verification status, and refuses independently confirmed, pending-review and expired records. An edit bumps the version, marks the record for re-indexing, makes saved reports stale, and changes open customer requests for the old version to *superseded*. PDF-backed records edited after upload show "Edited after upload".
+
+**What is stored, and the 90-day purge.** `signoff_purge_pii(90)` removes, 90 days after a request closes: the customer email, name, the address hash and masked hint, free-text comments, and all codes, sessions and rate-limit rows. It **keeps** the typed signature, decision, timestamp, snapshot and its fingerprint, record version, file hash and event names, because the typed signature *is* the acknowledgment and is itself personal information; it is not deleted by the purge. Hashed addresses in the suppression list (opt-outs, bounces, complaints) are kept so those addresses are not contacted again. Invitations hold only the worker's name, a link and an opt-out/privacy notice. Tokens, codes and full addresses are kept out of logs (a redacting logger and tests that capture logs), and the customer pages and API send `no-store`, `noindex` and `no-referrer`.
+
+**Retention scheduling (proposal, not enabled).** If `pg_cron` is available in the project (Dashboard, Database, Extensions), a daily job could call `select public.signoff_purge_pii(90);`. Do not enable or configure it without separate approval. Until then the function can be run manually.
+
+**Email delivery.** `SIGNOFF_MAIL_MODE`: `off` (default; nothing sent), `mock` (simulated local outbox, banners everywhere, available only outside production), `resend` (real email). Resend mode refuses to send unless `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_WEBHOOK_SECRET` and `APP_BASE_URL` are set. **Bounce/complaint handling is required before real customer use:** point a Resend webhook at `POST /api/webhooks/resend` (signature-verified); bounced or complained addresses go on the suppression list and open invitations to them are cancelled. Domain verification (SPF/DKIM/DMARC) and DNS are a separate, not-yet-approved step.
+
+**Rollback.** Set `SIGNOFF_ENABLED=false`: new requests, customer routes and sends return 404 and no mail is sent. Acknowledgments already stored stay in the database. Fixes ship as new forward migrations; tables holding signed records are not dropped by default.
+
+**Applying it.** The migration is additive but has **not** been applied to the development or any other project. Applying it, enabling the flag with real mail, DNS changes and deployment each need separate approval. Local testing uses the disposable database and mock mode only.
+
+API: worker `GET /api/signoff/config`, `GET|POST /api/signoff/requests`, `POST /api/signoff/requests/:id/{revoke,resend}`, `GET /api/signoff/outbox` (mock only); customer `POST /api/signoff/{gate,code,verify,snapshot,respond,opt-out}`; `POST /api/webhooks/resend`. Page: `/signoff`, `/signoff/privacy`.
+
 ## Deployment checklist
 
 Not deployed yet. Before hosting, and after approval of each action:
@@ -143,7 +166,7 @@ Not deployed yet. Before hosting, and after approval of each action:
 ## Limits
 
 - Matching rules are written for the seeded heat-pump requirements; arbitrary job postings are not supported yet.
-- Records cannot yet be edited or deleted after saving; each rehearsal uses a new worker instead.
+- Work records and checklists can be edited (see Customer sign-off); certifications, training and other types cannot yet, and nothing can be deleted. Each rehearsal uses a new worker instead.
 - There is no reviewer or issuer workflow, so nothing becomes *independently confirmed* through the app.
 - Sign-in uses provisioned accounts; there is no self-service sign-up.
 - Long provider outages degrade to manual capture and honest "unavailable" states; outage behavior has not been exhaustively failure-injected.

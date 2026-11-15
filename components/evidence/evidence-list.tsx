@@ -5,6 +5,12 @@ import { api, openOriginal, toApiError } from "@/lib/client/api";
 import { TYPE_LABEL, formatDate } from "@/lib/client/labels";
 import { FictionalTag, IndexStatus, VerificationTag } from "../ui/status";
 import { Icon } from "../ui/icons";
+import { EditForm } from "./edit-form";
+import { SignoffPanel } from "./signoff-panel";
+import { FIXTURE_MODE } from "@/lib/client/api";
+
+const SIGNOFF_TYPES = ["work_record", "checklist"];
+const EDITABLE = ["self_reported", "document_supplied"];
 
 function Facts({ label, items }: { label: string; items: string[] }) {
   if (!items.length) return null;
@@ -25,6 +31,8 @@ function Facts({ label, items }: { label: string; items: string[] }) {
 function EvidenceItem({ evidence: e, onChanged }: { evidence: Evidence; onChanged: (e: Evidence) => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const canEdit = !FIXTURE_MODE && SIGNOFF_TYPES.includes(e.type) && EDITABLE.includes(e.verificationStatus);
   const sd = e.structuredData;
 
   async function retry() {
@@ -94,6 +102,12 @@ function EvidenceItem({ evidence: e, onChanged }: { evidence: Evidence; onChange
               </button>
             )}
           </div>
+          {e.sourceKind === "pdf_upload" && e.version > 1 && <p className="text-xs text-slate">Edited after upload: the fields below may differ from the original document.</p>}
+          {canEdit && !editing && (
+            <button className="btn btn-quiet" onClick={() => setEditing(true)}><Icon name="pen" className="size-4" /> Edit details</button>
+          )}
+          {editing && <EditForm evidence={e} onSaved={(saved) => { setEditing(false); onChanged(saved); }} onCancel={() => setEditing(false)} />}
+          {canEdit && !editing && <SignoffPanel evidence={e} />}
           {message && <p className="text-sm text-danger" role="alert">{message}</p>}
         </div>
       </details>
