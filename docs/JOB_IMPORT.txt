@@ -47,10 +47,19 @@ Pending: the live provider acceptance test, then release (both below; each step 
   local match runs are labelled fixtures from the real evaluator, not real memory-backed runs. Nothing touched the
   hosted project in this round. (Earlier: one read-only check of the test technician's two records, both `indexed`.)
 
-### Hosted database
+### Hosted database and live test (2026-11-15, approved)
 
-The import migration `20261118100000_job_import.sql` has **NOT** been applied to the hosted project
-(`opportunity_imports` answered 404 on 2026-11-15). Production runs `main` (77629ed) with the import flag off.
+- Backup: `~/qualitrail-backups/20261115T134044Z-pre-import-explanations/` (roles, schema, data, migration history).
+- Dry run: exactly `20261118100000` and `20261119100000` pending; both replayed on the restored hosted schema; DB tests
+  23/23. Applied with `supabase db push`; installed versions now end at `20261119100000`. Existing data unchanged.
+- Scope (from the SQL): new tables `opportunity_imports`, `match_run_explanations`; 9 nullable/defaulted columns on
+  `opportunities`, 5 nullable columns on `requirements`; `requirement_results_assessment_check` replaced by a superset
+  adding `cannot_assess`; 11 service-role-only functions. Nothing dropped except that one replaced check.
+- Live test as "Inbox A Test (fictional)" on the Lever listing: TinyFish 1, Gemini 2, Supermemory 23 searches (0
+  retries, 0 writes, 0 emails). Job `c5a0ab5b…`: 12 lines, EPA 608 honestly "no sufficient evidence", 11
+  `cannot_assess`. Explanation: 3 eligibility, 8 sent to the AI: 3 accepted, 5 withheld (`worker_claim`; 4 are false
+  positives from "ability" wording in the AI's restatement of the line). UI acceptance 18/18; report printable.
+- Production code, Vercel settings and flags unchanged. PR #11 unmerged.
 
 ### WARNING: local configuration touches hosted data
 
