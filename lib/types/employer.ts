@@ -1,79 +1,71 @@
 import { z } from "zod";
-import { EvidenceAssessment, EvidenceType, RequirementPriority, VerificationStatus } from "./contracts";
+import { VerificationStatus } from "./contracts";
 
-export const PACKET_FORMAT = "employer-packet-v1";
+export const PACKET_FORMAT = "employer-packet-v2";
 
-/** A completed confirmation as it may appear to an employer. Never a customer's name, address, signature or comment. */
+/**
+ * A confirmation as an employer may see it. Only confirmations whose confirmer explicitly allowed external sharing
+ * ever get here. Never a customer's name, address, signature or comment; never a supervisor's comment or address.
+ */
 export const PacketConfirmation = z.discriminatedUnion("kind", [
-  z.object({
+  z.strictObject({
     kind: z.literal("customer"),
     decidedAt: z.string().nullable(),
+    /** The tasks listed in the description the customer acknowledged. */
+    acknowledgedActivities: z.array(z.string()),
     /** Development test mode: no real email reached anyone. */
     simulated: z.boolean(),
   }),
-  z.object({
+  z.strictObject({
     kind: z.literal("supervisor"),
     basis: z.enum(["observed", "documents"]),
     observedTasks: z.array(z.string()),
     decidedAt: z.string().nullable(),
-    /** Self-entered and unverified. Present ONLY when the reviewer explicitly agreed to employer sharing. */
-    reviewer: z.object({ name: z.string(), organization: z.string().nullable(), title: z.string().nullable() }).nullable(),
+    /** Self-entered and unverified. Null unless the supervisor ALSO allowed their name to be shown. */
+    reviewer: z.strictObject({ name: z.string(), organization: z.string().nullable(), title: z.string().nullable() }).nullable(),
   }),
 ]);
 export type PacketConfirmation = z.infer<typeof PacketConfirmation>;
 
-export const PacketRecord = z.object({
+/** Minimal work details + what was confirmed. No issuer, summary, equipment, documents or comments. */
+export const PacketWork = z.strictObject({
   id: z.string(),
-  /** "R1", "R2", … used to link requirement rows to records. */
-  ref: z.string(),
   version: z.number().int(),
-  type: EvidenceType,
+  type: z.enum(["work_record", "checklist"]),
   title: z.string(),
   date: z.string().nullable(),
-  issuer: z.string().nullable(),
-  expirationDate: z.string().nullable(),
-  verificationStatus: VerificationStatus,
-  activities: z.array(z.string()),
-  equipment: z.array(z.string()),
-  skills: z.array(z.string()),
-  originalShared: z.boolean(),
-  confirmations: z.array(PacketConfirmation),
+  confirmations: z.array(PacketConfirmation).min(1),
 });
-export type PacketRecord = z.infer<typeof PacketRecord>;
+export type PacketWork = z.infer<typeof PacketWork>;
 
-export const EmployerPacket = z.object({
+export const PacketCertification = z.strictObject({
+  id: z.string(),
+  version: z.number().int(),
+  title: z.string(),
+  issuer: z.string().nullable(),
+  date: z.string().nullable(),
+  expirationDate: z.string().nullable(),
+  /** "document_supplied" means the technician uploaded it and nobody has checked it. */
+  verificationStatus: VerificationStatus,
+  originalShared: z.boolean(),
+});
+export type PacketCertification = z.infer<typeof PacketCertification>;
+
+export const EmployerPacket = z.strictObject({
   format: z.literal(PACKET_FORMAT),
   generatedAt: z.string(),
   isSynthetic: z.boolean(),
-  technician: z.object({ name: z.string(), trade: z.string() }),
-  opportunity: z.object({
-    title: z.string(),
-    employer: z.string(),
-    location: z.string().nullable(),
-    sourceUrl: z.string().nullable(),
-    sourceKind: z.enum(["listing_url", "pasted_text", "other"]),
-  }),
-  report: z.object({ reference: z.string(), createdAt: z.string(), status: z.enum(["completed", "stale"]) }),
-  counts: z.record(EvidenceAssessment, z.number().int()),
-  requirements: z.array(z.object({
-    text: z.string(),
-    priority: RequirementPriority.nullable(),
-    mandatory: z.boolean(),
-    assessment: EvidenceAssessment,
-    records: z.array(z.object({ ref: z.string(), role: z.enum(["direct", "supporting"]) })),
-    /** Records the report linked to this requirement that the technician chose not to share. */
-    notSharedCount: z.number().int().nonnegative(),
-  })),
-  records: z.array(PacketRecord),
-  includesConfirmations: z.boolean(),
+  technician: z.strictObject({ name: z.string(), trade: z.string() }),
+  work: z.array(PacketWork),
+  certifications: z.array(PacketCertification),
 });
 export type EmployerPacket = z.infer<typeof EmployerPacket>;
 
 export const ShareSelection = z.object({
-  opportunityId: z.uuid(),
-  recordIds: z.array(z.uuid()).max(100),
+  workIds: z.array(z.uuid()).max(100).default([]),
+  certificationIds: z.array(z.uuid()).max(100).default([]),
+  /** Certification originals the technician separately authorized. Off unless listed. */
   originalIds: z.array(z.uuid()).max(100).default([]),
-  includeConfirmations: z.boolean().default(true),
 });
 export type ShareSelection = z.infer<typeof ShareSelection>;
 
@@ -83,6 +75,13 @@ export const CreateShareRequest = ShareSelection.extend({
   reviewed: z.literal(true, { error: "Confirm you've reviewed exactly what will be shared." }),
 });
 
+/** What the technician can choose from (their own data; the share page). */
+export const ShareCandidates = z.object({
+  work: z.array(z.object({ id: z.string(), title: z.string(), date: z.string().nullable(), eligible: z.boolean(), shareableCount: z.number().int(), withheldCount: z.number().int() })),
+  certifications: z.array(z.object({ id: z.string(), title: z.string(), issuer: z.string().nullable(), verificationStatus: VerificationStatus })),
+});
+export type ShareCandidates = z.infer<typeof ShareCandidates>;
+
 export const ShareStatus = z.enum(["pending", "active", "revoked", "expired"]);
 export type ShareStatus = z.infer<typeof ShareStatus>;
 
@@ -90,9 +89,8 @@ export const WorkerShare = z.object({
   id: z.string(),
   status: ShareStatus,
   emailHint: z.string().nullable(),
-  opportunityId: z.string(),
-  jobTitle: z.string().nullable(),
-  recordCount: z.number().int(),
+  workCount: z.number().int(),
+  certificationCount: z.number().int(),
   createdAt: z.string(),
   expiresAt: z.string(),
   acceptedAt: z.string().nullable(),
@@ -107,13 +105,12 @@ export const ReviewerShare = z.object({
   id: z.string(),
   status: ShareStatus,
   technician: z.string().nullable(),
-  jobTitle: z.string().nullable(),
   sharedAt: z.string(),
   expiresAt: z.string(),
 });
 export type ReviewerShare = z.infer<typeof ReviewerShare>;
 
-/** A frozen packet as read back (by the reviewer or the technician). */
+/** A frozen packet as read back (by the reviewer or the technician). Parsed strictly: unknown fields are refused. */
 export const SharedPacket = z.object({
   id: z.string(),
   packet: EmployerPacket,

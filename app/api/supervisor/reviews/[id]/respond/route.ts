@@ -46,10 +46,10 @@ async function handlePOST(request: Request, { params }: { params: Promise<{ id: 
     return apiError("forbidden", MESSAGE[String(r.reason)] ?? "This request is no longer open.");
   }
   // Separate, optional and prospective: only when the reviewer ticked it now. If recording it fails, the review stands
-  // and employers simply don't see the reviewer's details.
+  // and is simply never shared outside QualiTrail.
   let shareConsent = false;
   if (employerReviewEnabled() && "shareWithEmployers" in d && d.shareWithEmployers === true) {
-    const c = await rpc("review_record_share_consent", { p_auth: s.user.id, p_request: id.data, p_consent_version: SHARE_CONSENT_VERSION });
+    const c = await rpc("review_record_share_consent", { p_auth: s.user.id, p_request: id.data, p_consent_version: SHARE_CONSENT_VERSION, p_show_name: d.shareName === true });
     shareConsent = c.ok === true;
   }
   if (r.repeated !== true) {

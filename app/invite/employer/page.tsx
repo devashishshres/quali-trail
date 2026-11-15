@@ -74,7 +74,7 @@ export default function EmployerInvitePage() {
         {view === "closed" && <><h1 className="font-display text-2xl font-semibold">This share isn&apos;t open</h1><p className="text-slate">{share?.status === "revoked" ? "The technician withdrew it." : share?.status === "expired" ? "It has expired." : share?.answered ? "It was already opened. Sign in with the address it was sent to and find it under your shared packets." : `Status: ${share?.status}.`}</p><Link className="btn btn-secondary" href="/employer">Your shared packets</Link></>}
         {share && (view === "signed_out" || view === "ready") && (
           <>
-            <h1 className="font-display text-2xl font-semibold">{share.workerName ? `${share.workerName} shared a qualification packet with you` : "A technician shared a qualification packet with you"}</h1>
+            <h1 className="font-display text-2xl font-semibold">{share.workerName ? `${share.workerName} shared records with you` : "A technician shared records with you"}</h1>
             {share.emailHint && <p className="text-slate">It was shared with <strong>{share.emailHint}</strong>. Only an account with that confirmed email address can open it.</p>}
             <p className="text-sm text-slate">
               Opening it shows only that you control that email address. It does not verify your identity, your employer or anything in the

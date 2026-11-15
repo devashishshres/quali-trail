@@ -5,7 +5,7 @@ import { emailMode, emailReady } from "@/lib/server/email/config";
 import { templates } from "@/lib/server/email/templates";
 import { employerReviewEnabled } from "@/lib/server/employer/flags";
 import { buildPacket, PacketSelectionError } from "@/lib/server/employer/packet";
-import { loadPacketInputs, SELECTION_MESSAGE, SHARE_REASON } from "@/lib/server/employer/service";
+import { loadCandidates, SELECTION_MESSAGE, SHARE_REASON } from "@/lib/server/employer/service";
 import { hmac, maskEmail, newToken, normalizeEmail } from "@/lib/server/signoff/crypto";
 import { logSignoffError } from "@/lib/server/signoff/redact";
 import { allow, appBaseUrl, guarded, rpc, rpcValue } from "@/lib/server/signoff/service";
@@ -23,8 +23,8 @@ async function handleGET() {
 
 /**
  * POST /api/employer-shares — share one frozen packet with one email address. The packet is rebuilt here from the
- * technician's own data with the same builder as the preview; nothing in it comes from the request body except the
- * selection itself.
+ * technician's own eligible items with the same builder as the preview; nothing in it comes from the request body
+ * except the selection, and the database re-checks every item's eligibility when storing it.
  */
 async function handlePOST(request: Request) {
   const ctx = await getAuthedContext();
@@ -37,11 +37,11 @@ async function handlePOST(request: Request) {
 
   const d = body.data;
   try {
-    const inputs = await loadPacketInputs(ctx, d.opportunityId);
-    if (!inputs) return apiError("not_found", "Run a match for this job first.");
+    const candidates = await loadCandidates(ctx.worker.id);
+    if (!candidates) return apiError("internal", "Couldn't load your records.");
     let packet;
     try {
-      packet = buildPacket(inputs, d);
+      packet = buildPacket(candidates, d, new Date());
     } catch (e) {
       if (e instanceof PacketSelectionError) return apiError("validation_failed", SELECTION_MESSAGE[e.reason]);
       throw e;
@@ -50,8 +50,11 @@ async function handlePOST(request: Request) {
     const token = newToken();
     const originals = new Set(d.originalIds);
     const r = await rpc("employer_share_create", {
-      p_worker: ctx.worker.id, p_run: inputs.run.id, p_packet_format: PACKET_FORMAT, p_packet: packet,
-      p_records: packet.records.map((x) => ({ id: x.id, original: originals.has(x.id) })),
+      p_worker: ctx.worker.id, p_packet_format: PACKET_FORMAT, p_packet: packet,
+      p_records: [
+        ...packet.work.map((x) => ({ id: x.id, kind: "work", original: false })),
+        ...packet.certifications.map((x) => ({ id: x.id, kind: "certification", original: originals.has(x.id) })),
+      ],
       p_email: email, p_email_hash: hmac("email", email), p_hint: maskEmail(email), p_token_hash: hmac("token", token), p_valid_days: d.validDays,
     });
     if (!r.ok) return apiError("validation_failed", SHARE_REASON[String(r.reason)] ?? "Couldn't share the packet.");

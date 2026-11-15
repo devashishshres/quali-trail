@@ -93,10 +93,10 @@ export const SupervisorReview = z.object({
 export type SupervisorReview = z.infer<typeof SupervisorReview>;
 
 export const ReviewRespondRequest = z.discriminatedUnion("decision", [
-  // shareWithEmployers: the reviewer's explicit, optional permission to show their name with this confirmation in
-  // packets the technician shares with employers. Absent or false means employers never see their details.
-  z.object({ decision: z.literal("confirm_observed"), observedTasks: z.array(z.string().max(500)).min(1).max(50), comment: z.string().trim().max(2000).nullable().optional(), agreed: z.literal(true), shareWithEmployers: z.boolean().optional() }),
-  z.object({ decision: z.literal("confirm_documents_reviewed"), comment: z.string().trim().max(2000).nullable().optional(), agreed: z.literal(true), shareWithEmployers: z.boolean().optional() }),
+  // shareWithEmployers: the reviewer's explicit, optional permission for this confirmation to be shared with employers
+  // the technician chooses; shareName additionally allows their name. Absent or false: never shared / never named.
+  z.object({ decision: z.literal("confirm_observed"), observedTasks: z.array(z.string().max(500)).min(1).max(50), comment: z.string().trim().max(2000).nullable().optional(), agreed: z.literal(true), shareWithEmployers: z.boolean().optional(), shareName: z.boolean().optional() }),
+  z.object({ decision: z.literal("confirm_documents_reviewed"), comment: z.string().trim().max(2000).nullable().optional(), agreed: z.literal(true), shareWithEmployers: z.boolean().optional(), shareName: z.boolean().optional() }),
   z.object({ decision: z.literal("request_correction"), comment: z.string().trim().min(1).max(2000) }),
   z.object({ decision: z.literal("decline"), comment: z.string().trim().max(2000).nullable().optional() }),
 ]);

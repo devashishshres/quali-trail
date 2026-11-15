@@ -1,8 +1,15 @@
 -- Employer review portal. ADDITIVE. Not applied to any shared project by this change.
 --
--- A technician shares ONE frozen packet (a job report plus the records and completed confirmations they chose)
--- with ONE reviewer email address. The reviewer proves they control that address by signing in with it (confirmed
--- email); that is all it proves. Access is read-only, expires, can be withdrawn, and is logged.
+-- A technician shares ONE frozen packet with ONE reviewer email address. A packet may contain ONLY:
+--   * work records (work_record / checklist) that have a completed confirmation for their CURRENT version which the
+--     confirmer explicitly allowed to be shared externally, and
+--   * uploaded certifications (type certification, uploaded file), each with an optional, separately authorized
+--     original document.
+-- No job-fit reports, AI text, unconfirmed work, other record types, profile details beyond name and trade, comments,
+-- signatures or contact information. Original WORK documents are never shared by this feature.
+--
+-- The reviewer proves only that they control the invited address (signed-in account with that confirmed email).
+-- Access is read-only, expires, can be withdrawn, and is logged.
 --
 -- Separation from everything else:
 --   * No client role can read or write these tables (RLS on, all privileges revoked). Only the service-role
@@ -10,19 +17,17 @@
 --   * Nothing here reads or grants supervisor authority, and no supervisor function reads these tables.
 --   * The reviewer never gets a path to worker tables: the packet is a copy made at share time.
 --
--- Consent for showing a supervisor's name to an employer is a SEPARATE, insert-only record made at decision time
--- (review_share_consents). Existing review_responses rows are untouched, so no consent is assumed for them.
+-- Permission to share a supervisor's confirmation externally (and, separately, their name) is an insert-only record
+-- made at decision time (review_share_consents). Customers permit external sharing, never naming, by agreeing to the
+-- customer-ack-v2 statement. Older confirmations carry no such permission and are never shared.
 
 create table public.employer_shares (
   id                    uuid primary key default gen_random_uuid(),
   worker_id             uuid not null references public.workers (id) on delete restrict,
-  -- Provenance only. The packet below is self-contained, so later edits or deletions never change it.
-  opportunity_id        uuid not null,
-  match_run_id          uuid not null,
   packet_format         text not null check (char_length(packet_format) <= 60),
   packet                jsonb not null check (jsonb_typeof(packet) = 'object'),
   packet_hash           text not null check (packet_hash ~ '^[0-9a-f]{64}$'),
-  -- [{id, version, fileHash, original}] taken from the evidence table at share time (never from the client).
+  -- [{id, kind, version, fileHash, original}] taken from the evidence table at share time (never from the client).
   shared_records        jsonb not null check (jsonb_typeof(shared_records) = 'array'),
   -- The invited address is needed only until it is used. Cleared on accept, revoke and expiry.
   invited_email         text check (invited_email is null or char_length(invited_email) <= 320),
@@ -54,12 +59,13 @@ create table public.employer_share_events (
 );
 create index employer_share_events_share_idx on public.employer_share_events (share_id, id);
 
--- A supervisor's explicit, prospective permission to show their self-entered name, organization and title with a
--- confirmation in packets the technician shares with employers. One per review request; insert-only.
+-- A supervisor's explicit, prospective permission, given when deciding: the technician may share this confirmation
+-- with employers they choose; show_name additionally allows the self-entered name, organization and title.
 create table public.review_share_consents (
   request_id            uuid primary key references public.review_requests (id) on delete restrict,
   reviewer_auth_user_id uuid not null references auth.users (id) on delete restrict,
   consent_version       text not null check (char_length(consent_version) <= 60),
+  show_name             boolean not null,
   created_at            timestamptz not null default now()
 );
 
@@ -79,8 +85,7 @@ begin
   if tg_op = 'DELETE' then raise exception 'employer shares cannot be deleted'; end if;
   if new.packet is distinct from old.packet or new.packet_hash is distinct from old.packet_hash
      or new.packet_format is distinct from old.packet_format or new.shared_records is distinct from old.shared_records
-     or new.worker_id is distinct from old.worker_id or new.opportunity_id is distinct from old.opportunity_id
-     or new.match_run_id is distinct from old.match_run_id or new.invited_email_hash is distinct from old.invited_email_hash
+     or new.worker_id is distinct from old.worker_id or new.invited_email_hash is distinct from old.invited_email_hash
      or new.expires_at is distinct from old.expires_at or new.created_at is distinct from old.created_at then
     raise exception 'a shared packet cannot be changed';
   end if;
@@ -121,10 +126,91 @@ alter table public.email_deliveries add constraint email_deliveries_related_type
   ('signoff_request','supervisor_relationship','review_request','employer_share'));
 
 -- ------------------------------------------------------------------
--- Functions (service role only; see the grant loop at the end)
+-- Eligibility (the single source of truth for what may be shared)
 -- ------------------------------------------------------------------
 
--- Lazily close shares past their expiry. Clears the address and tokens.
+-- Supervisor confirmations of the record's current version that the reviewer allowed to be shared externally.
+-- The reviewer's details are returned ONLY when they also allowed their name.
+create or replace function public.employer_shareable_supervisor(p_worker uuid)
+returns table (evidence_id uuid, request_id uuid, basis text, observed_tasks jsonb, decided_at timestamptz,
+               reviewer_name text, reviewer_organization text, reviewer_title text)
+language sql stable security definer set search_path = '' as $$
+  select q.evidence_id, q.id,
+         case when q.status = 'confirmed_observed' then 'observed' else 'documents' end,
+         case when q.status = 'confirmed_observed' then r.observed_tasks else '[]'::jsonb end,
+         r.created_at,
+         case when c.show_name then r.reviewer_name end,
+         case when c.show_name then r.reviewer_organization end,
+         case when c.show_name then r.reviewer_title end
+    from public.review_requests q
+    join public.review_responses r on r.request_id = q.id
+    join public.review_share_consents c on c.request_id = q.id and c.reviewer_auth_user_id = r.reviewer_auth_user_id
+    join public.evidence e on e.id = q.evidence_id and e.worker_id = q.worker_id
+   where q.worker_id = p_worker and q.status in ('confirmed_observed','confirmed_documents')
+     and q.evidence_version = e.version;
+$$;
+
+-- Customer acknowledgments of the record's current version given under the statement that permits external sharing
+-- (customer-ack-v2). Never the customer's name, address, typed signature or comment.
+create or replace function public.employer_shareable_customer(p_worker uuid)
+returns table (evidence_id uuid, request_id uuid, decided_at timestamptz, simulated boolean, acknowledged_activities jsonb)
+language sql stable security definer set search_path = '' as $$
+  select s.evidence_id, s.id, r.created_at, s.delivery_mode = 'mock', coalesce(s.snapshot -> 'activities', '[]'::jsonb)
+    from public.signoff_requests s
+    join public.signoff_responses r on r.request_id = s.id
+    join public.evidence e on e.id = s.evidence_id and e.worker_id = s.worker_id
+   where s.worker_id = p_worker and s.status = 'acknowledged' and r.decision = 'confirm'
+     and r.statement_version = 'customer-ack-v2' and s.evidence_version = e.version;
+$$;
+
+-- Everything the technician may choose from, plus honest counts of confirmations that cannot be shared.
+create or replace function public.employer_share_candidates(p_worker uuid)
+returns jsonb language plpgsql stable security definer set search_path = '' as $$
+declare w public.workers%rowtype;
+begin
+  select * into w from public.workers where id = p_worker;
+  if not found then return null; end if;
+  return jsonb_build_object(
+    'worker', jsonb_build_object('name', w.name, 'trade', w.trade, 'isSynthetic', w.is_synthetic),
+    'work', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', e.id, 'version', e.version, 'type', e.type, 'title', e.title, 'date', e.source_date,
+               'supervisor', coalesce((select jsonb_agg(jsonb_build_object(
+                   'requestId', s.request_id, 'basis', s.basis, 'observedTasks', s.observed_tasks, 'decidedAt', s.decided_at,
+                   'reviewer', case when s.reviewer_name is null then null else jsonb_build_object(
+                     'name', s.reviewer_name, 'organization', s.reviewer_organization, 'title', s.reviewer_title) end)
+                   order by s.decided_at)
+                 from public.employer_shareable_supervisor(p_worker) s where s.evidence_id = e.id), '[]'::jsonb),
+               'customer', coalesce((select jsonb_agg(jsonb_build_object(
+                   'requestId', c.request_id, 'decidedAt', c.decided_at, 'simulated', c.simulated, 'acknowledgedActivities', c.acknowledged_activities)
+                   order by c.decided_at)
+                 from public.employer_shareable_customer(p_worker) c where c.evidence_id = e.id), '[]'::jsonb),
+               -- Completed confirmations of this version that carry no permission for external sharing.
+               'withheldCount',
+                 (select count(*) from public.review_requests q
+                   where q.evidence_id = e.id and q.evidence_version = e.version
+                     and q.status in ('confirmed_observed','confirmed_documents')
+                     and not exists (select 1 from public.review_share_consents k where k.request_id = q.id))
+               + (select count(*) from public.signoff_requests s join public.signoff_responses r on r.request_id = s.id
+                   where s.evidence_id = e.id and s.evidence_version = e.version and s.status = 'acknowledged'
+                     and r.statement_version is distinct from 'customer-ack-v2'))
+             order by e.source_date desc nulls last, e.created_at desc)
+        from public.evidence e
+       where e.worker_id = p_worker and e.type in ('work_record','checklist')), '[]'::jsonb),
+    'certifications', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'id', e.id, 'version', e.version, 'title', e.title, 'issuer', e.issuer, 'date', e.source_date,
+               'expirationDate', e.structured_data ->> 'expirationDate', 'verificationStatus', e.verification_status)
+             order by e.source_date desc nulls last, e.created_at desc)
+        from public.evidence e
+       where e.worker_id = p_worker and e.type = 'certification' and e.source_kind = 'pdf_upload' and e.storage_path is not null), '[]'::jsonb));
+end;
+$$;
+
+-- ------------------------------------------------------------------
+-- Shares
+-- ------------------------------------------------------------------
+
 create or replace function public.employer_share_expire_due()
 returns integer language plpgsql security definer set search_path = '' as $$
 declare n integer;
@@ -147,22 +233,21 @@ returns boolean language sql security definer set search_path = '' as $$
                   where invited_email_hash = p_email_hash and status = 'pending' and expires_at > now());
 $$;
 
--- Create a share atomically. p_records: [{"id": uuid, "original": bool}]. The packet is built by the server from
--- the worker's own data; this function checks that it describes exactly the records it says, at their CURRENT
--- versions, and that they and the run belong to this worker.
+-- Create a share atomically. p_records: [{"id": uuid, "kind": "work"|"certification", "original": bool}].
+-- The packet is built by the server from the technician's own data; this function independently re-checks that every
+-- item is eligible NOW, that originals are certifications only, and that the packet lists exactly these items at
+-- their current versions.
 create or replace function public.employer_share_create(
-  p_worker uuid, p_run uuid, p_packet_format text, p_packet jsonb, p_records jsonb,
+  p_worker uuid, p_packet_format text, p_packet jsonb, p_records jsonb,
   p_email text, p_email_hash text, p_hint text, p_token_hash text, p_valid_days integer
 ) returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
-  w public.workers%rowtype; run public.match_runs%rowtype; own_email text; rec jsonb; e public.evidence%rowtype;
+  w public.workers%rowtype; own_email text; rec jsonb; e public.evidence%rowtype; kind text; orig boolean;
   shared jsonb := '[]'::jsonb; packet_ids text[]; given_ids text[]; new_id uuid; pv integer;
 begin
   select * into w from public.workers where id = p_worker;
   if not found then return jsonb_build_object('ok', false, 'reason', 'not_found'); end if;
-  select * into run from public.match_runs where id = p_run and worker_id = p_worker;
-  if not found or run.status <> 'completed' then return jsonb_build_object('ok', false, 'reason', 'no_report'); end if;
-  if jsonb_typeof(p_records) <> 'array' or jsonb_array_length(p_records) > 100 then
+  if jsonb_typeof(p_records) <> 'array' or jsonb_array_length(p_records) = 0 or jsonb_array_length(p_records) > 100 then
     return jsonb_build_object('ok', false, 'reason', 'invalid');
   end if;
   select lower(email) into own_email from auth.users where id = w.auth_user_id;
@@ -175,26 +260,39 @@ begin
   end if;
 
   for rec in select * from jsonb_array_elements(p_records) loop
+    kind := rec ->> 'kind';
+    orig := coalesce((rec ->> 'original')::boolean, false);
     select * into e from public.evidence where id = (rec ->> 'id')::uuid and worker_id = p_worker for share;
     if not found then return jsonb_build_object('ok', false, 'reason', 'not_found'); end if;
-    if coalesce((rec ->> 'original')::boolean, false) and e.storage_path is null then
-      return jsonb_build_object('ok', false, 'reason', 'no_original');
+    if kind = 'work' then
+      if orig then return jsonb_build_object('ok', false, 'reason', 'no_original'); end if;
+      if e.type not in ('work_record','checklist')
+         or not (exists (select 1 from public.employer_shareable_supervisor(p_worker) s where s.evidence_id = e.id)
+                 or exists (select 1 from public.employer_shareable_customer(p_worker) c where c.evidence_id = e.id)) then
+        return jsonb_build_object('ok', false, 'reason', 'not_eligible');
+      end if;
+    elsif kind = 'certification' then
+      if e.type <> 'certification' or e.source_kind <> 'pdf_upload' or e.storage_path is null then
+        return jsonb_build_object('ok', false, 'reason', 'not_eligible');
+      end if;
+    else
+      return jsonb_build_object('ok', false, 'reason', 'invalid');
     end if;
-    -- The packet must show the record at the version that is current now.
-    select (x ->> 'version')::integer into pv from jsonb_array_elements(p_packet -> 'records') x where x ->> 'id' = e.id::text;
+    select (x ->> 'version')::integer into pv
+      from jsonb_array_elements(coalesce(p_packet -> 'work', '[]'::jsonb) || coalesce(p_packet -> 'certifications', '[]'::jsonb)) x
+     where x ->> 'id' = e.id::text;
     if pv is distinct from e.version then return jsonb_build_object('ok', false, 'reason', 'changed'); end if;
-    shared := shared || jsonb_build_array(jsonb_build_object(
-      'id', e.id, 'version', e.version, 'fileHash', e.file_hash, 'original', coalesce((rec ->> 'original')::boolean, false)));
+    shared := shared || jsonb_build_array(jsonb_build_object('id', e.id, 'kind', kind, 'version', e.version, 'fileHash', e.file_hash, 'original', orig));
   end loop;
-  select coalesce(array_agg(x ->> 'id' order by x ->> 'id'), '{}') into packet_ids from jsonb_array_elements(p_packet -> 'records') x;
+  select coalesce(array_agg(x ->> 'id' order by x ->> 'id'), '{}') into packet_ids
+    from jsonb_array_elements(coalesce(p_packet -> 'work', '[]'::jsonb) || coalesce(p_packet -> 'certifications', '[]'::jsonb)) x;
   select coalesce(array_agg(x ->> 'id' order by x ->> 'id'), '{}') into given_ids from jsonb_array_elements(p_records) x;
   if packet_ids is distinct from given_ids then return jsonb_build_object('ok', false, 'reason', 'invalid'); end if;
 
   insert into public.employer_shares
-    (worker_id, opportunity_id, match_run_id, packet_format, packet, packet_hash, shared_records,
-     invited_email, invited_email_hash, email_hint, token_hash, expires_at)
+    (worker_id, packet_format, packet, packet_hash, shared_records, invited_email, invited_email_hash, email_hint, token_hash, expires_at)
   values
-    (p_worker, run.opportunity_id, run.id, p_packet_format, p_packet, encode(sha256(convert_to(p_packet::text, 'utf8')), 'hex'), shared,
+    (p_worker, p_packet_format, p_packet, encode(sha256(convert_to(p_packet::text, 'utf8')), 'hex'), shared,
      lower(p_email), p_email_hash, p_hint, p_token_hash, now() + make_interval(days => greatest(1, least(coalesce(p_valid_days, 7), 30))))
   returning id into new_id;
   insert into public.employer_share_events (share_id, event) values (new_id, 'invited');
@@ -259,7 +357,7 @@ begin
   perform public.employer_share_expire_due();
   return (select coalesce(jsonb_agg(jsonb_build_object(
            'id', s.id, 'status', s.status, 'technician', s.packet #>> '{technician,name}',
-           'jobTitle', s.packet #>> '{opportunity,title}', 'sharedAt', s.created_at, 'expiresAt', s.expires_at)
+           'sharedAt', s.created_at, 'expiresAt', s.expires_at)
            order by s.created_at desc), '[]'::jsonb)
     from public.employer_shares s where s.reviewer_auth_user_id = p_auth);
 end;
@@ -291,8 +389,8 @@ begin
 end;
 $$;
 
--- Storage path of an original, only if the technician shared THAT original in THIS packet, the share is active,
--- and the record is still the version that was shared. Logged.
+-- Storage path of a CERTIFICATION original, only if the technician authorized THAT original in THIS packet, the
+-- share is active, and the record is still the version and file that was shared. Work documents: never. Logged.
 create or replace function public.employer_share_document_path(p_auth uuid, p_share uuid, p_record uuid)
 returns text language plpgsql security definer set search_path = '' as $$
 declare s public.employer_shares%rowtype; path text;
@@ -303,8 +401,9 @@ begin
   select e.storage_path into path
     from jsonb_array_elements(s.shared_records) r
     join public.evidence e on e.id = (r ->> 'id')::uuid and e.worker_id = s.worker_id
-   where (r ->> 'id')::uuid = p_record and coalesce((r ->> 'original')::boolean, false)
-     and e.version = (r ->> 'version')::integer and e.file_hash = r ->> 'fileHash' and e.storage_path is not null;
+   where (r ->> 'id')::uuid = p_record and r ->> 'kind' = 'certification' and coalesce((r ->> 'original')::boolean, false)
+     and e.type = 'certification' and e.version = (r ->> 'version')::integer and e.file_hash = r ->> 'fileHash'
+     and e.storage_path is not null;
   if path is null then return null; end if;
   insert into public.employer_share_events (share_id, event, record_id) values (s.id, 'original_opened', p_record);
   return path;
@@ -317,8 +416,9 @@ returns jsonb language plpgsql security definer set search_path = '' as $$
 begin
   perform public.employer_share_expire_due();
   return (select coalesce(jsonb_agg(jsonb_build_object(
-           'id', s.id, 'status', s.status, 'emailHint', s.email_hint, 'opportunityId', s.opportunity_id,
-           'jobTitle', s.packet #>> '{opportunity,title}', 'recordCount', jsonb_array_length(s.shared_records),
+           'id', s.id, 'status', s.status, 'emailHint', s.email_hint,
+           'workCount', (select count(*) from jsonb_array_elements(s.shared_records) r where r ->> 'kind' = 'work'),
+           'certificationCount', (select count(*) from jsonb_array_elements(s.shared_records) r where r ->> 'kind' = 'certification'),
            'createdAt', s.created_at, 'expiresAt', s.expires_at, 'acceptedAt', s.accepted_at, 'closedAt', s.closed_at,
            'views', (select count(*) from public.employer_share_events v where v.share_id = s.id and v.event = 'viewed'),
            'originalsOpened', (select count(*) from public.employer_share_events v where v.share_id = s.id and v.event = 'original_opened'),
@@ -355,9 +455,9 @@ begin
 end;
 $$;
 
--- Record a supervisor's explicit consent, only by the reviewer who decided, only for a confirmation, and only at
+-- Record a supervisor's explicit permission, only by the reviewer who decided, only for a confirmation, and only at
 -- decision time (within 15 minutes of it). Never retroactive for older reviews.
-create or replace function public.review_record_share_consent(p_auth uuid, p_request uuid, p_consent_version text)
+create or replace function public.review_record_share_consent(p_auth uuid, p_request uuid, p_consent_version text, p_show_name boolean)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare resp public.review_responses%rowtype;
 begin
@@ -366,17 +466,10 @@ begin
   if resp.decision not in ('confirm_observed','confirm_documents_reviewed') then return jsonb_build_object('ok', false, 'reason', 'not_confirmation'); end if;
   if exists (select 1 from public.review_share_consents where request_id = p_request) then return jsonb_build_object('ok', true, 'repeated', true); end if;
   if resp.created_at < now() - interval '15 minutes' then return jsonb_build_object('ok', false, 'reason', 'too_late'); end if;
-  insert into public.review_share_consents (request_id, reviewer_auth_user_id, consent_version) values (p_request, p_auth, p_consent_version);
+  insert into public.review_share_consents (request_id, reviewer_auth_user_id, consent_version, show_name)
+    values (p_request, p_auth, p_consent_version, coalesce(p_show_name, false));
   return jsonb_build_object('ok', true);
 end;
-$$;
-
--- Which of this worker's reviews carry consent (for building packets).
-create or replace function public.review_share_consented(p_worker uuid)
-returns jsonb language sql stable security definer set search_path = '' as $$
-  select coalesce(jsonb_agg(c.request_id), '[]'::jsonb)
-    from public.review_share_consents c join public.review_requests q on q.id = c.request_id
-   where q.worker_id = p_worker;
 $$;
 
 do $$
@@ -384,11 +477,12 @@ declare f text;
 begin
   for f in select p.oid::regprocedure::text from pg_proc p join pg_namespace n on n.oid = p.pronamespace
             where n.nspname = 'public'
-              and p.proname in ('employer_share_expire_due','account_has_pending_employer_share','employer_share_create',
+              and p.proname in ('employer_shareable_supervisor','employer_shareable_customer','employer_share_candidates',
+                                'employer_share_expire_due','account_has_pending_employer_share','employer_share_create',
                                 'employer_share_peek','employer_share_accept','employer_share_list_for_reviewer',
                                 'employer_share_changed','employer_share_get','employer_share_document_path',
                                 'employer_share_list_for_worker','employer_share_worker_get','employer_share_revoke',
-                                'review_record_share_consent','review_share_consented')
+                                'review_record_share_consent')
   loop
     execute format('revoke all on function %s from public, anon, authenticated', f);
     execute format('grant execute on function %s to service_role', f);

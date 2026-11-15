@@ -16,6 +16,7 @@ const WORKER_NAV: NavItem[] = [
 ];
 const SUPERVISORS: NavItem = { href: "/supervisors", label: "Supervisors", icon: "people" };
 const REVIEWS: NavItem = { href: "/supervisor", label: "Reviews", icon: "clipboard" };
+const SHARE: NavItem = { href: "/share", label: "Share", icon: "external" };
 
 /** Navigation follows the caller's own roles: technician, reviewer, or both. */
 function useNav(): NavItem[] {
@@ -26,6 +27,7 @@ function useNav(): NavItem[] {
   return [
     ...(m.worker ? WORKER_NAV : []),
     ...(m.worker && m.features.supervisorReview ? [SUPERVISORS] : []),
+    ...(m.worker && m.features.employerReview ? [SHARE] : []),
     ...(m.supervisor ? [REVIEWS] : []),
   ];
 }

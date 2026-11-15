@@ -1,135 +1,86 @@
-import type { Evidence, EvidenceAssessment, MatchRun, Opportunity, WorkerReview } from "@/lib/types";
-import { EmployerPacket, PACKET_FORMAT, type PacketConfirmation, type PacketRecord, type ShareSelection } from "@/lib/types/employer";
+import { EmployerPacket, PACKET_FORMAT, ShareCandidates, type PacketConfirmation, type ShareSelection } from "@/lib/types/employer";
+import type { VerificationStatus } from "@/lib/types";
 
-export interface CustomerAck {
-  evidenceId: string;
-  evidenceVersion: number;
-  status: string;
-  deliveryMode: "resend" | "mock";
-  decidedAt: string | null;
-}
-
-export interface PacketInputs {
+/**
+ * Raw candidates from `employer_share_candidates` (service role, this worker only). The database already limits
+ * confirmations to those explicitly permitted for external sharing, for the record's current version, and leaves the
+ * supervisor's details out unless naming was permitted. The builder re-applies every rule anyway.
+ */
+export interface Candidates {
   worker: { name: string; trade: string; isSynthetic: boolean };
-  opportunity: Opportunity;
-  run: MatchRun;
-  evidence: Evidence[];
-  customerAcks: CustomerAck[];
-  reviews: WorkerReview[];
-  /** Review request ids whose reviewer explicitly agreed to employer sharing at decision time. */
-  consentedReviewIds: Set<string>;
-  now: Date;
+  work: {
+    id: string; version: number; type: string; title: string; date: string | null;
+    supervisor: { requestId: string; basis: string; observedTasks: unknown; decidedAt: string | null; reviewer: { name: string; organization: string | null; title: string | null } | null }[];
+    customer: { requestId: string; decidedAt: string | null; simulated: boolean; acknowledgedActivities: unknown }[];
+    withheldCount: number;
+  }[];
+  certifications: {
+    id: string; version: number; title: string; issuer: string | null; date: string | null; expirationDate: string | null; verificationStatus: VerificationStatus;
+  }[];
 }
 
 export class PacketSelectionError extends Error {
-  constructor(public readonly reason: "no_report" | "no_records" | "not_in_report" | "no_original") {
+  constructor(public readonly reason: "no_items" | "not_eligible" | "no_original") {
     super(reason);
   }
 }
 
-/** Records the report links to any requirement, in first-appearance order. These are the only shareable ones. */
-export function reportRecordIds(run: MatchRun): string[] {
-  return [...new Set(run.results.flatMap((r) => r.connections.map((c) => c.evidenceId)))];
+const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+function confirmationsOf(w: Candidates["work"][number]): PacketConfirmation[] {
+  const out: PacketConfirmation[] = [];
+  for (const c of w.customer) out.push({ kind: "customer", decidedAt: c.decidedAt, acknowledgedActivities: strings(c.acknowledgedActivities), simulated: c.simulated === true });
+  for (const s of w.supervisor) {
+    const basis = s.basis === "observed" ? "observed" : "documents";
+    out.push({
+      kind: "supervisor", basis, observedTasks: basis === "observed" ? strings(s.observedTasks) : [], decidedAt: s.decidedAt,
+      reviewer: s.reviewer && s.reviewer.name ? { name: s.reviewer.name, organization: s.reviewer.organization ?? null, title: s.reviewer.title ?? null } : null,
+    });
+  }
+  return out;
+}
+
+/** What the technician may choose from, with honest counts of confirmations that can't be shared. */
+export function listCandidates(c: Candidates): ShareCandidates {
+  return ShareCandidates.parse({
+    work: c.work.map((w) => {
+      const n = confirmationsOf(w).length;
+      return { id: w.id, title: w.title, date: w.date, eligible: n > 0, shareableCount: n, withheldCount: Number(w.withheldCount) || 0 };
+    }),
+    certifications: c.certifications.map((x) => ({ id: x.id, title: x.title, issuer: x.issuer, verificationStatus: x.verificationStatus })),
+  });
 }
 
 /**
  * The ONE function that decides what an employer sees. The technician's preview and the stored packet both come
- * from here, so the preview is exactly what is shared.
- *
- * Deliberately left out: free-text summaries, credential numbers, AI explanations and narrative text, customer
- * names/addresses/signatures/comments, supervisor comments and email addresses, and any record not selected.
- * A supervisor's self-entered name appears only with an explicit sharing consent recorded at decision time.
+ * from here. Only selected, eligible items; strict schema, so no other field can be added by mistake.
  */
-export function buildPacket(input: PacketInputs, selection: Pick<ShareSelection, "recordIds" | "originalIds" | "includeConfirmations">): EmployerPacket {
-  const { run, opportunity } = input;
-  // Only a current report can be shared (printing has the same rule).
-  if (run.status !== "completed") throw new PacketSelectionError("no_report");
-  const linked = reportRecordIds(run);
-  const chosen = new Set(selection.recordIds);
-  if (!chosen.size) throw new PacketSelectionError("no_records");
-  for (const id of chosen) if (!linked.includes(id)) throw new PacketSelectionError("not_in_report");
-  const byId = new Map(input.evidence.map((e) => [e.id, e]));
-  for (const id of chosen) if (!byId.has(id)) throw new PacketSelectionError("not_in_report");
-  const originals = new Set(selection.originalIds ?? []);
-  for (const id of originals) if (!chosen.has(id) || !byId.get(id)!.sourceAvailable) throw new PacketSelectionError("no_original");
+export function buildPacket(c: Candidates, selection: ShareSelection, now: Date): EmployerPacket {
+  const workIds = new Set(selection.workIds);
+  const certIds = new Set(selection.certificationIds);
+  if (!workIds.size && !certIds.size) throw new PacketSelectionError("no_items");
+  const workById = new Map(c.work.map((w) => [w.id, w]));
+  const certById = new Map(c.certifications.map((x) => [x.id, x]));
+  for (const id of workIds) {
+    const w = workById.get(id);
+    if (!w || !["work_record", "checklist"].includes(w.type) || confirmationsOf(w).length === 0) throw new PacketSelectionError("not_eligible");
+  }
+  for (const id of certIds) if (!certById.has(id)) throw new PacketSelectionError("not_eligible");
+  // Originals: certifications only, each separately selected. Never a work document.
+  for (const id of selection.originalIds) if (!certIds.has(id)) throw new PacketSelectionError("no_original");
+  const originals = new Set(selection.originalIds);
 
-  const order = linked.filter((id) => chosen.has(id));
-  const ref = new Map(order.map((id, i) => [id, `R${i + 1}`]));
-
-  const records: PacketRecord[] = order.map((id) => {
-    const e = byId.get(id)!;
-    return {
-      id,
-      ref: ref.get(id)!,
-      version: e.version,
-      type: e.type,
-      title: e.title,
-      date: e.date,
-      issuer: e.issuer,
-      expirationDate: e.structuredData.expirationDate ?? null,
-      verificationStatus: e.verificationStatus,
-      activities: [...e.structuredData.activities],
-      equipment: [...e.structuredData.equipment],
-      skills: [...e.structuredData.skills],
-      originalShared: originals.has(id),
-      confirmations: selection.includeConfirmations ? confirmationsFor(e, input) : [],
-    };
-  });
-
-  const reqById = new Map(opportunity.requirements.map((q) => [q.id, q]));
-  const counts = { evidence_found: 0, needs_review: 0, no_sufficient_evidence: 0, cannot_assess: 0 } as Record<EvidenceAssessment, number>;
-  const requirements = run.results.map((r) => {
-    counts[r.assessment] = (counts[r.assessment] ?? 0) + 1;
-    const shared = r.connections.filter((c) => chosen.has(c.evidenceId));
-    return {
-      text: r.originalText,
-      priority: reqById.get(r.requirementId)?.priority ?? null,
-      mandatory: r.mandatory,
-      assessment: r.assessment,
-      records: shared.map((c) => ({ ref: ref.get(c.evidenceId)!, role: c.role })),
-      notSharedCount: r.connections.length - shared.length,
-    };
-  });
-
-  const info = opportunity.importInfo ?? null;
   return EmployerPacket.parse({
     format: PACKET_FORMAT,
-    generatedAt: input.now.toISOString(),
-    isSynthetic: input.worker.isSynthetic || opportunity.isSynthetic,
-    technician: { name: input.worker.name, trade: input.worker.trade },
-    opportunity: {
-      title: opportunity.title,
-      employer: opportunity.employer,
-      location: info?.location ?? null,
-      sourceUrl: opportunity.sourceUrl,
-      sourceKind: info?.sourceKind ?? "other",
-    },
-    report: { reference: run.id.slice(0, 8), createdAt: run.createdAt, status: run.status },
-    counts,
-    requirements,
-    records,
-    includesConfirmations: selection.includeConfirmations,
+    generatedAt: now.toISOString(),
+    isSynthetic: c.worker.isSynthetic,
+    technician: { name: c.worker.name, trade: c.worker.trade },
+    work: c.work.filter((w) => workIds.has(w.id)).map((w) => ({
+      id: w.id, version: w.version, type: w.type, title: w.title, date: w.date, confirmations: confirmationsOf(w),
+    })),
+    certifications: c.certifications.filter((x) => certIds.has(x.id)).map((x) => ({
+      id: x.id, version: x.version, title: x.title, issuer: x.issuer, date: x.date, expirationDate: x.expirationDate ?? null,
+      verificationStatus: x.verificationStatus, originalShared: originals.has(x.id),
+    })),
   });
-}
-
-/** Completed confirmations given for the CURRENT version of the record only. */
-function confirmationsFor(e: Evidence, input: PacketInputs): PacketConfirmation[] {
-  const out: PacketConfirmation[] = [];
-  for (const a of input.customerAcks) {
-    if (a.evidenceId !== e.id || a.evidenceVersion !== e.version || a.status !== "acknowledged") continue;
-    out.push({ kind: "customer", decidedAt: a.decidedAt, simulated: a.deliveryMode === "mock" });
-  }
-  for (const r of input.reviews) {
-    if (r.evidenceId !== e.id || r.evidenceVersion !== e.version) continue;
-    if (r.status !== "confirmed_observed" && r.status !== "confirmed_documents") continue;
-    const named = input.consentedReviewIds.has(r.id) && r.reviewerName;
-    out.push({
-      kind: "supervisor",
-      basis: r.status === "confirmed_observed" ? "observed" : "documents",
-      observedTasks: r.status === "confirmed_observed" ? [...r.observedTasks] : [],
-      decidedAt: r.decidedAt,
-      reviewer: named ? { name: r.reviewerName!, organization: r.reviewerOrganization, title: r.reviewerTitle } : null,
-    });
-  }
-  return out;
 }

@@ -15,7 +15,7 @@ import { safeNext } from "@/lib/server/accounts/policy";
  */
 
 const PUBLIC = ["/sign-in", "/sign-up", "/forgot-password", "/reset-password", "/auth/", "/signoff", "/invite/"];
-const WORKER_PAGES = ["/passport", "/evidence", "/opportunities", "/reports", "/supervisors", "/jobs"];
+const WORKER_PAGES = ["/passport", "/evidence", "/opportunities", "/reports", "/supervisors", "/jobs", "/share"];
 /** Exact path or a sub-path ("/evidence", "/evidence/x"), never a longer sibling ("/evidencex"). */
 const startsWithAny = (path: string, list: string[]) =>
   list.some((p) => (p.endsWith("/") ? path.startsWith(p) : path === p || path.startsWith(`${p}/`)));

@@ -29,6 +29,7 @@ export function ReviewClient() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [shareOk, setShareOk] = useState(false);
 
   if (r.status === "loading") return <Loading label="Loading the request…" />;
   if (r.error) return <ErrorNotice error={r.error} />;
@@ -53,8 +54,9 @@ export function ReviewClient() {
     setMessage(null);
     try {
       const shareWithEmployers = f.get("shareWithEmployers") === "yes";
-      if (decision === "confirm_observed") await accountsApi.respond(id, { decision, observedTasks: f.getAll("task").map(String), comment, agreed: true, shareWithEmployers });
-      else if (decision === "confirm_documents_reviewed") await accountsApi.respond(id, { decision, comment, agreed: true, shareWithEmployers });
+      const shareName = shareWithEmployers && f.get("shareName") === "yes";
+      if (decision === "confirm_observed") await accountsApi.respond(id, { decision, observedTasks: f.getAll("task").map(String), comment, agreed: true, shareWithEmployers, shareName });
+      else if (decision === "confirm_documents_reviewed") await accountsApi.respond(id, { decision, comment, agreed: true, shareWithEmployers, shareName });
       else if (decision === "request_correction") await accountsApi.respond(id, { decision, comment: comment ?? "" });
       else if (decision === "decline") await accountsApi.respond(id, { decision, comment });
       setDone(true);
@@ -114,10 +116,11 @@ export function ReviewClient() {
             )}
             {decision === "confirm_documents_reviewed" && <label className="flex gap-2 rounded-md bg-paper p-3 text-sm"><input type="checkbox" required /> {statements.documents}</label>}
             {statements.shareConsent && (decision === "confirm_observed" || decision === "confirm_documents_reviewed") && (
-              <label className="flex gap-2 rounded-md border border-line p-3 text-sm">
-                <input type="checkbox" name="shareWithEmployers" value="yes" />
-                <span><span className="block font-semibold">Optional: let employers see who confirmed this</span>{statements.shareConsent}</span>
-              </label>
+              <fieldset className="space-y-2 rounded-md border border-line p-3 text-sm">
+                <legend className="px-1 font-semibold">Optional: sharing with employers</legend>
+                <label className="flex gap-2"><input type="checkbox" name="shareWithEmployers" value="yes" onChange={(e) => setShareOk(e.target.checked)} /> {statements.shareConsent.share}</label>
+                <label className={`ml-6 flex gap-2 ${shareOk ? "" : "opacity-50"}`}><input type="checkbox" name="shareName" value="yes" disabled={!shareOk} /> {statements.shareConsent.name}</label>
+              </fieldset>
             )}
             {decision && (
               <label className="block"><span className="mb-1 block text-sm font-semibold">{decision === "request_correction" ? "What should be corrected?" : "Comment (optional)"}</span>

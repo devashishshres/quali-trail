@@ -13,7 +13,6 @@ const DB_NAME = "qualitrail_employer_test";
 const ROOT = join(__dirname, "..", "..");
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
-let url: string;
 let db: Client;
 type R = Record<string, unknown> & { ok: boolean; reason?: string };
 async function fn<T = R>(name: string, args: unknown[]): Promise<T> {
@@ -30,36 +29,60 @@ async function user(email: string, confirmed = true) {
   return id;
 }
 const addr = (n: string) => `${n}.${randomUUID().slice(0, 6)}@test.qualitrail.dev`;
-async function worker(name: string) {
+type W = { auth: string; id: string; email: string; rel?: string; sup?: string };
+async function worker(name: string): Promise<W> {
   const email = addr(name.toLowerCase());
   const auth = await user(email);
   const r = await fn("account_onboard_worker", [auth, `${name} (fictional)`, "HVAC", null, "employee"]);
   return { auth, id: r.workerId as string, email };
 }
-async function record(w: { id: string }, storage: string | null = null) {
+async function record(w: W, type = "work_record", storage: string | null = null) {
   const id = randomUUID();
   await db.query(
-    `insert into public.evidence (id, worker_id, type, title, source_kind, storage_path, file_hash, verification_status, structured_data)
-     values ($1,$2,'work_record',$3,$4,$5,$6,'self_reported','{"activities":["Brazed line set"]}')`,
-    [id, w.id, `Fictional job ${id.slice(0, 6)}`, storage ? "pdf_upload" : "manual_text", storage, sha(id)],
+    `insert into public.evidence (id, worker_id, type, title, issuer, source_kind, storage_path, file_hash, verification_status, structured_data)
+     values ($1,$2,$3,$4,'Fictional Issuer',$5,$6,$7,$8,$9)`,
+    [id, w.id, type, `Fictional ${type} ${id.slice(0, 6)}`, storage ? "pdf_upload" : "manual_text", storage, sha(id), storage ? "document_supplied" : "self_reported",
+     JSON.stringify({ activities: ["Brazed line set"], summary: "Customer Pat Example, 12 Fictional Lane", credentialNumber: "CRED-123" })],
   );
   return id;
 }
-async function report(w: { id: string }) {
-  const opp = (await db.query("insert into public.opportunities (worker_id, title, employer) values ($1,'Fictional Installer','Fictional Co') returning id", [w.id])).rows[0].id;
-  return (await db.query("insert into public.match_runs (worker_id, opportunity_id, evidence_revision, status) values ($1,$2,0,'completed') returning id", [w.id, opp])).rows[0].id as string;
-}
 const version = async (id: string) => (await db.query("select version from public.evidence where id=$1", [id])).rows[0].version as number;
-async function share(w: { id: string }, run: string, email: string, recs: { id: string; original?: boolean }[], days = 7) {
-  // Adding a record marks earlier runs stale (as in the app); this fixture's report is treated as re-run.
-  await db.query("update public.match_runs set status = 'completed' where id = $1", [run]);
+/** Supervisor confirmation of `rec`; consent: undefined = none, else the show_name flag. */
+async function supervisorConfirms(w: W, rec: string, consent?: boolean) {
+  if (!w.rel) {
+    const semail = addr("sup");
+    w.sup = await user(semail);
+    await fn("account_onboard_supervisor", [w.sup, "Sky Reviewer (fictional)", "Fictional Mech", "Lead"]);
+    await fn("sup_invite_create", [w.id, semail, sha(`e${semail}`), "x***", sha(`t${semail}`), 14]);
+    w.rel = (await fn("sup_invite_answer", [sha(`t${semail}`), w.sup, true])).relationshipId as string;
+  }
+  const q = await fn("review_create", [w.id, rec, w.rel, 30, false]);
+  expect(await fn("review_respond", [w.sup, q.id, "confirm_observed", JSON.stringify(["Brazed line set"]), "Private supervisor comment", "supervisor-review-v1"])).toMatchObject({ ok: true });
+  if (consent !== undefined) expect(await fn("review_record_share_consent", [w.sup, q.id, "supervisor-employer-share-v2", consent])).toMatchObject({ ok: true });
+  return q.id as string;
+}
+async function customerAck(w: W, rec: string, statement: string) {
+  const req = randomUUID(), session = randomUUID();
+  await db.query(
+    `insert into public.signoff_requests (id, worker_id, evidence_id, evidence_version, snapshot, snapshot_hash, file_hash, customer_email, customer_name,
+       token_hash, status, delivery_mode, expires_at, verified_session_id, email_verified_at)
+     values ($1,$2,$3,$4,$5,$6,'x','casey@example.test','Casey Customer',$7,'acknowledged','resend',now() + interval '7 days',$8,now())`,
+    [req, w.id, rec, await version(rec), JSON.stringify({ activities: ["Replaced contactor"] }), sha(req), sha(`tok${req}`), session]);
+  await db.query(
+    `insert into public.signoff_responses (request_id, decision, typed_name, comment, statement_version, snapshot_hash, evidence_version, session_id)
+     values ($1,'confirm','Casey Typed Signature','Customer private note',$2,$3,$4,$5)`, [req, statement, sha(req), await version(rec), session]);
+}
+async function share(w: W, email: string, items: { id: string; kind: "work" | "certification"; original?: boolean }[], days = 7) {
   const token = sha(`tok-${randomUUID()}`);
-  const packet = { format: "employer-packet-v1", technician: { name: "x" }, opportunity: { title: "Fictional Installer" },
-    records: await Promise.all(recs.map(async (r) => ({ id: r.id, version: await version(r.id) }))) };
-  const r = await fn("employer_share_create", [w.id, run, "employer-packet-v1", JSON.stringify(packet), JSON.stringify(recs.map((x) => ({ id: x.id, original: Boolean(x.original) }))),
-    email, sha(`email:${email.toLowerCase()}`), "x***", token, days]);
+  const v = async (x: { id: string }) => ({ id: x.id, version: await version(x.id) });
+  const packet = { format: "employer-packet-v2", technician: { name: "x", trade: "HVAC" },
+    work: await Promise.all(items.filter((x) => x.kind === "work").map(v)),
+    certifications: await Promise.all(items.filter((x) => x.kind === "certification").map(v)) };
+  const r = await fn("employer_share_create", [w.id, "employer-packet-v2", JSON.stringify(packet),
+    JSON.stringify(items.map((x) => ({ id: x.id, kind: x.kind, original: Boolean(x.original) }))), email, sha(`email:${email.toLowerCase()}`), "x***", token, days]);
   return { ...r, id: r.id as string, token };
 }
+type Cand = { work: { id: string; supervisor: { reviewer: unknown }[]; customer: unknown[]; withheldCount: number }[]; certifications: { id: string }[] };
 
 describe.skipIf(!ADMIN_URL)("employer review portal (database)", () => {
   beforeAll(async () => {
@@ -70,150 +93,142 @@ describe.skipIf(!ADMIN_URL)("employer review portal (database)", () => {
     await admin.end();
     const u = new URL(ADMIN_URL!);
     u.pathname = `/${DB_NAME}`;
-    url = u.toString();
-    db = new Client({ connectionString: url });
+    db = new Client({ connectionString: u.toString() });
     await db.connect();
     await db.query(readFileSync(join(ROOT, "tests/db/supabase-stubs.sql"), "utf8"));
     for (const f of readdirSync(join(ROOT, "supabase/migrations")).sort()) await db.query(readFileSync(join(ROOT, "supabase/migrations", f), "utf8"));
   });
-  afterAll(async () => {
-    await db?.end().catch(() => undefined);
+  afterAll(async () => { await db?.end().catch(() => undefined); });
+
+  it("only explicitly permitted confirmations of the current version make work shareable", async () => {
+    const w = await worker("Kai");
+    const none = await record(w);
+    const old = await record(w);
+    const okAnon = await record(w);
+    const okNamed = await record(w);
+    const custV1 = await record(w);
+    const custV2 = await record(w);
+    const training = await record(w, "training", "fictional/training.pdf");
+    const cert = await record(w, "certification", "fictional/cert.pdf");
+    const typedCert = await record(w, "certification", null);
+    await supervisorConfirms(w, old);
+    await supervisorConfirms(w, okAnon, false);
+    await supervisorConfirms(w, okNamed, true);
+    await customerAck(w, custV1, "customer-ack-v1");
+    await customerAck(w, custV2, "customer-ack-v2");
+
+    const c = await fn<Cand>("employer_share_candidates", [w.id]);
+    const byId = new Map(c.work.map((x) => [x.id, x]));
+    expect(byId.get(none)).toMatchObject({ supervisor: [], customer: [], withheldCount: 0 });
+    expect(byId.get(old)).toMatchObject({ supervisor: [], customer: [], withheldCount: 1 });
+    expect(byId.get(okAnon)!.supervisor).toEqual([expect.objectContaining({ reviewer: null })]);
+    expect(byId.get(okNamed)!.supervisor).toEqual([expect.objectContaining({ reviewer: { name: "Sky Reviewer (fictional)", organization: "Fictional Mech", title: "Lead" } })]);
+    expect(byId.get(custV1)).toMatchObject({ customer: [], withheldCount: 1 });
+    expect(byId.get(custV2)!.customer).toEqual([expect.objectContaining({ acknowledgedActivities: ["Replaced contactor"], simulated: false })]);
+    expect(c.certifications.map((x) => x.id)).toEqual([cert]);
+    const text = JSON.stringify(c);
+    for (const leak of ["Private supervisor comment", "Casey", "casey@example.test", "Customer private note", "Pat Example", "CRED-123", "Fictional Lane"]) expect(text).not.toContain(leak);
+
+    const hr = addr("hr");
+    for (const bad of [none, old, custV1]) expect((await share(w, hr, [{ id: bad, kind: "work" }])).reason).toBe("not_eligible");
+    expect((await share(w, hr, [{ id: training, kind: "certification" }])).reason).toBe("not_eligible");
+    expect((await share(w, hr, [{ id: typedCert, kind: "certification" }])).reason).toBe("not_eligible");
+    expect((await share(w, hr, [{ id: okAnon, kind: "certification" }])).reason).toBe("not_eligible");
+    expect((await share(w, hr, [{ id: cert, kind: "work" }])).reason).toBe("not_eligible");
+    expect((await share(w, hr, [{ id: okAnon, kind: "work", original: true }])).reason).toBe("no_original");
+    expect((await share(w, hr, [])).reason).toBe("invalid");
+    expect((await share(w, hr, [{ id: okAnon, kind: "work" }, { id: custV2, kind: "work" }, { id: cert, kind: "certification", original: true }])).ok).toBe(true);
+
+    await db.query("update public.evidence set title = 'Edited (fictional)' where id = $1", [okAnon]);
+    expect((await share(w, hr, [{ id: okAnon, kind: "work" }])).reason).toBe("not_eligible");
   });
 
-  it("only the confirmed account with the invited email can open a share; a forwarded link does nothing", async () => {
+  it("consent is explicit, by the reviewer only, for confirmations only, at decision time only", async () => {
+    const w = await worker("Rae");
+    const q = await supervisorConfirms(w, await record(w));
+    await db.query("alter table public.review_responses disable trigger review_responses_frozen");
+    await db.query("update public.review_responses set created_at = now() - interval '1 day' where request_id=$1", [q]);
+    await db.query("alter table public.review_responses enable trigger review_responses_frozen");
+    expect((await fn("review_record_share_consent", [w.sup, q, "v", true])).reason).toBe("too_late");
+    const fresh = await supervisorConfirms(w, await record(w));
+    expect((await fn("review_record_share_consent", [w.auth, fresh, "v", true])).reason).toBe("not_found");
+    const dq = await fn("review_create", [w.id, await record(w), w.rel, 30, false]);
+    await fn("review_respond", [w.sup, dq.id, "decline", null, null, "supervisor-review-v1"]);
+    expect((await fn("review_record_share_consent", [w.sup, dq.id, "v", true])).reason).toBe("not_confirmation");
+    expect(await fn("review_record_share_consent", [w.sup, fresh, "v", false])).toMatchObject({ ok: true });
+    await expect(db.query("update public.review_share_consents set show_name = true where request_id=$1", [fresh])).rejects.toThrow(/append-only/);
+  });
+
+  it("only the confirmed invited account can open; a forwarded link does nothing; no other role is granted", async () => {
     const w = await worker("Wren");
-    const run = await report(w);
-    const rec = await record(w);
+    const cert = await record(w, "certification", "fictional/c.pdf");
     const email = addr("hiring");
-    expect((await share(w, run, w.email, [{ id: rec }])).reason).toBe("own_email");
-    const s = await share(w, run, email.toUpperCase(), [{ id: rec }]);
+    expect((await share(w, w.email, [{ id: cert, kind: "certification" }])).reason).toBe("own_email");
+    const s = await share(w, email.toUpperCase(), [{ id: cert, kind: "certification" }]);
     expect(s.ok).toBe(true);
     expect(await fn("account_has_pending_employer_share", [sha(`email:${email}`)])).toBe(true);
-    expect(await fn("employer_share_peek", [s.token])).toMatchObject({ ok: true, status: "pending", workerName: "Wren (fictional)", emailHint: "x***" });
-
     const stranger = await user(addr("stranger"));
     expect((await fn("employer_share_accept", [s.token, stranger])).reason).toBe("wrong_account");
-    expect((await fn("employer_share_accept", [s.token, await user(email + ".x", true)])).reason).toBe("wrong_account");
     expect((await fn("employer_share_accept", [s.token, w.auth])).reason).toBe("self");
-    const unconfirmed = await user(addr("unconfirmed"), false);
-    expect((await fn("employer_share_accept", [s.token, unconfirmed])).reason).toBe("email_unconfirmed");
-    // Stranger cannot read by id either.
-    expect((await fn("employer_share_get", [stranger, s.id])).reason).toBe("not_found");
-
+    expect((await fn("employer_share_accept", [s.token, await user(addr("unconfirmed"), false)])).reason).toBe("email_unconfirmed");
     const reviewer = await user(email);
     expect(await fn("employer_share_accept", [s.token, reviewer])).toMatchObject({ ok: true, id: s.id });
-    const row = (await db.query("select invited_email, token_hash, status from public.employer_shares where id=$1", [s.id])).rows[0];
-    expect(row).toEqual({ invited_email: null, token_hash: null, status: "active" });
     expect(await fn("employer_share_accept", [s.token, reviewer])).toMatchObject({ ok: true, repeated: true });
-    expect((await fn("employer_share_accept", [s.token, stranger])).reason).toBe("wrong_account"); // forwarded after acceptance
-    expect(await fn("employer_share_peek", [s.token])).toMatchObject({ answered: true, workerName: null, emailHint: null });
-    expect(await fn("account_has_pending_employer_share", [sha(`email:${email}`)])).toBe(false);
-
-    const got = await fn("employer_share_get", [reviewer, s.id]);
-    expect(got).toMatchObject({ ok: true, changedRecordIds: [] });
+    expect((await fn("employer_share_accept", [s.token, stranger])).reason).toBe("wrong_account");
     expect((await fn("employer_share_get", [stranger, s.id])).reason).toBe("not_found");
-    // Opening a share grants no supervisor role and no relationship.
+    expect(await fn("employer_share_get", [reviewer, s.id])).toMatchObject({ ok: true, changedRecordIds: [] });
     expect((await db.query("select count(*)::int n from public.supervisor_profiles where auth_user_id=$1", [reviewer])).rows[0].n).toBe(0);
     expect((await db.query("select count(*)::int n from public.supervisor_relationships where supervisor_auth_user_id=$1", [reviewer])).rows[0].n).toBe(0);
   });
 
-  it("the packet is frozen, records outside the worker are refused, and edits show as changed", async () => {
-    const w = await worker("Ash");
-    const other = await worker("Other");
-    const run = await report(w);
-    const mine = await record(w);
-    const theirs = await record(other);
-    expect((await share(w, run, addr("hr"), [{ id: theirs }])).reason).toBe("not_found");
-    expect((await share(w, await report(other), addr("hr"), [{ id: mine }])).reason).toBe("no_report");
-    expect((await share(w, run, addr("hr"), [{ id: mine, original: true }])).reason).toBe("no_original");
-    // A report made out of date by later record changes can't be shared.
-    expect((await share(w, run, addr("hr"), [{ id: mine }])).ok).toBe(true);
-    await record(w);
-    expect((await fn("employer_share_create", [w.id, run, "f", JSON.stringify({ records: [{ id: mine, version: await version(mine) }] }),
-      JSON.stringify([{ id: mine, original: false }]), addr("hr"), sha(randomUUID()), "x***", sha(randomUUID()), 7])).reason).toBe("no_report");
-    await db.query("update public.match_runs set status = 'completed' where id = $1", [run]);
-    // Packet claiming a stale version is refused.
-    const token = sha(randomUUID());
-    const stale = await fn("employer_share_create", [w.id, run, "employer-packet-v1", JSON.stringify({ records: [{ id: mine, version: 99 }] }),
-      JSON.stringify([{ id: mine, original: false }]), addr("hr"), sha(randomUUID()), "x***", token, 7]);
-    expect(stale.reason).toBe("changed");
-    // Packet listing a record that is not in the selection is refused.
-    const extra = await fn("employer_share_create", [w.id, run, "employer-packet-v1", JSON.stringify({ records: [{ id: mine, version: await version(mine) }, { id: theirs, version: 1 }] }),
-      JSON.stringify([{ id: mine, original: false }]), addr("hr"), sha(randomUUID()), "x***", sha(randomUUID()), 7]);
-    expect(extra.reason).toBe("invalid");
-
-    const email = addr("hr");
-    const s = await share(w, run, email, [{ id: mine }]);
+  it("certificate originals open only when authorized, unchanged and active; unselected items and work documents never", async () => {
+    const w = await worker("Rowan");
+    const work = await record(w, "work_record", "fictional/work-order.pdf");
+    await supervisorConfirms(w, work, true);
+    const authorized = await record(w, "certification", "fictional/authorized.pdf");
+    const notAuthorized = await record(w, "certification", "fictional/not-authorized.pdf");
+    const unselected = await record(w, "certification", "fictional/unselected.pdf");
+    const email = addr("lead");
+    const s = await share(w, email, [{ id: work, kind: "work" }, { id: authorized, kind: "certification", original: true }, { id: notAuthorized, kind: "certification" }]);
+    expect(s.ok).toBe(true);
     const reviewer = await user(email);
+    expect(await fn("employer_share_document_path", [reviewer, s.id, authorized])).toBeNull();
     await fn("employer_share_accept", [s.token, reviewer]);
+    expect(await fn("employer_share_document_path", [reviewer, s.id, authorized])).toBe("fictional/authorized.pdf");
+    for (const other of [notAuthorized, unselected, work]) expect(await fn("employer_share_document_path", [reviewer, s.id, other])).toBeNull();
+    // Even a tampered share row can't serve a work document.
+    await db.query("alter table public.employer_shares disable trigger employer_shares_frozen");
+    await db.query(`update public.employer_shares set shared_records = (select jsonb_agg(case when r->>'id' = $2 then r || '{"original": true, "kind": "certification"}'::jsonb else r end) from jsonb_array_elements(shared_records) r) where id = $1`, [s.id, work]);
+    await db.query("alter table public.employer_shares enable trigger employer_shares_frozen");
+    expect(await fn("employer_share_document_path", [reviewer, s.id, work])).toBeNull();
+
+    const got = await fn("employer_share_get", [reviewer, s.id]);
+    expect(JSON.stringify(got)).not.toContain(unselected);
+    await db.query("update public.evidence set file_hash = $2 where id=$1", [authorized, sha("replaced")]);
+    expect(await fn("employer_share_document_path", [reviewer, s.id, authorized])).toBeNull();
+    expect((await fn<{ changedRecordIds: string[] }>("employer_share_get", [reviewer, s.id])).changedRecordIds).toEqual([authorized]);
+
     await expect(db.query("update public.employer_shares set packet = '{}'::jsonb where id=$1", [s.id])).rejects.toThrow(/cannot be changed/);
-    await expect(db.query("update public.employer_shares set expires_at = now() + interval '90 days' where id=$1", [s.id])).rejects.toThrow(/cannot be changed/);
     await expect(db.query("delete from public.employer_shares where id=$1", [s.id])).rejects.toThrow(/cannot be deleted/);
     await expect(db.query("delete from public.employer_share_events where share_id=$1", [s.id])).rejects.toThrow(/append-only/);
-
-    await db.query("update public.evidence set title = 'Edited (fictional)' where id=$1", [mine]);
-    expect((await fn("employer_share_get", [reviewer, s.id])).changedRecordIds).toEqual([mine]);
-  });
-
-  it("originals open only when shared, at the shared version, while active; revocation and expiry end access", async () => {
-    const w = await worker("Rowan");
-    const run = await report(w);
-    const withDoc = await record(w, "fictional/shared.pdf");
-    const notShared = await record(w, "fictional/private.pdf");
-    const email = addr("lead");
-    const s = await share(w, run, email, [{ id: withDoc, original: true }, { id: notShared, original: false }]);
-    const reviewer = await user(email);
-    expect(await fn("employer_share_document_path", [reviewer, s.id, withDoc])).toBeNull(); // not yet accepted
-    await fn("employer_share_accept", [s.token, reviewer]);
-    expect(await fn("employer_share_document_path", [reviewer, s.id, withDoc])).toBe("fictional/shared.pdf");
-    expect(await fn("employer_share_document_path", [reviewer, s.id, notShared])).toBeNull();
-    expect(await fn("employer_share_document_path", [await user(addr("x")), s.id, withDoc])).toBeNull();
-    const events = (await db.query("select event from public.employer_share_events where share_id=$1 order by id", [s.id])).rows.map((r) => r.event);
-    expect(events).toEqual(["invited", "accepted", "original_opened"]);
-
-    await db.query("update public.evidence set file_hash = $2 where id=$1", [withDoc, sha("replaced")]);
-    expect(await fn("employer_share_document_path", [reviewer, s.id, withDoc])).toBeNull(); // replaced file is never served
-
     expect(await fn("employer_share_revoke", [w.id, s.id])).toMatchObject({ ok: true, status: "revoked" });
     expect((await fn("employer_share_get", [reviewer, s.id])).reason).toBe("revoked");
-    expect((await fn("employer_share_revoke", [(await worker("Nope")).id, s.id])).reason).toBe("not_found");
     await expect(db.query("update public.employer_shares set status='active' where id=$1", [s.id])).rejects.toThrow(/cannot be reopened/);
+    const events = (await db.query("select event from public.employer_share_events where share_id=$1 order by id", [s.id])).rows.map((r) => r.event);
+    expect(events).toEqual(["invited", "accepted", "original_opened", "viewed", "viewed", "revoked"]);
 
     const e2 = addr("later");
-    const s2 = await share(w, run, e2, [{ id: withDoc }], 1);
+    const s2 = await share(w, e2, [{ id: notAuthorized, kind: "certification" }], 1);
     const r2 = await user(e2);
     await fn("employer_share_accept", [s2.token, r2]);
     await db.query("alter table public.employer_shares disable trigger employer_shares_frozen");
     await db.query("update public.employer_shares set expires_at = now() - interval '1 second' where id=$1", [s2.id]);
     await db.query("alter table public.employer_shares enable trigger employer_shares_frozen");
     expect((await fn("employer_share_get", [r2, s2.id])).reason).toBe("expired");
-    const list = await fn<{ id: string; status: string; views: number }[]>("employer_share_list_for_worker", [w.id]);
-    expect(list.map((x) => x.status).sort()).toEqual(["expired", "revoked"]);
+    const list = await fn<{ status: string; workCount: number; certificationCount: number }[]>("employer_share_list_for_worker", [w.id]);
+    // (The revoked share was tampered above, which relabelled its work item; counts reflect the row as stored.)
+    expect(list.map((x) => [x.status, x.workCount, x.certificationCount])).toEqual([["expired", 0, 1], ["revoked", 0, 3]]);
     expect(JSON.stringify(list)).not.toContain(email);
-  });
-
-  it("supervisor consent is explicit, only by the reviewer, only for confirmations and only at decision time", async () => {
-    const w = await worker("Kai");
-    const semail = addr("sup");
-    const sauth = await user(semail);
-    await fn("account_onboard_supervisor", [sauth, "Sky (fictional)", "Fictional Mech", "Lead"]);
-    const inv = await fn("sup_invite_create", [w.id, semail, sha(`email:${semail}`), "x***", sha("t1" + semail), 14]);
-    const rel = (await fn("sup_invite_answer", [sha("t1" + semail), sauth, true])).relationshipId;
-    expect(inv.ok).toBe(true);
-    const old = await fn("review_create", [w.id, await record(w), rel, 30, false]);
-    const fresh = await fn("review_create", [w.id, await record(w), rel, 30, false]);
-    const declined = await fn("review_create", [w.id, await record(w), rel, 30, false]);
-    for (const q of [old, fresh]) expect(await fn("review_respond", [sauth, q.id, "confirm_observed", JSON.stringify(["Brazed line set"]), null, "supervisor-review-v1"])).toMatchObject({ ok: true });
-    await fn("review_respond", [sauth, declined.id, "decline", null, null, "supervisor-review-v1"]);
-    // An older review: consent is never recorded after the fact.
-    await db.query("alter table public.review_responses disable trigger review_responses_frozen");
-    await db.query("update public.review_responses set created_at = now() - interval '1 day' where request_id=$1", [old.id]);
-    await db.query("alter table public.review_responses enable trigger review_responses_frozen");
-    expect((await fn("review_record_share_consent", [sauth, old.id, "v"])).reason).toBe("too_late");
-    expect((await fn("review_record_share_consent", [w.auth, fresh.id, "v"])).reason).toBe("not_found");
-    expect((await fn("review_record_share_consent", [sauth, declined.id, "v"])).reason).toBe("not_confirmation");
-    expect(await fn("review_record_share_consent", [sauth, fresh.id, "v"])).toMatchObject({ ok: true });
-    expect(await fn("review_share_consented", [w.id])).toEqual([fresh.id]);
   });
 
   it("clients cannot read or write any of it directly", async () => {
@@ -223,6 +238,7 @@ describe.skipIf(!ADMIN_URL)("employer review portal (database)", () => {
         for (const t of ["employer_shares", "employer_share_events", "review_share_consents"]) {
           await expect(db.query(`select * from public.${t} limit 1`)).rejects.toThrow(/permission denied/);
         }
+        await expect(db.query("select public.employer_share_candidates($1)", [randomUUID()])).rejects.toThrow(/permission denied/);
         await expect(db.query("select public.employer_share_get($1,$2)", [randomUUID(), randomUUID()])).rejects.toThrow(/permission denied/);
       } finally {
         await db.query("reset role");
