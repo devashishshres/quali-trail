@@ -8,6 +8,7 @@
  * PURE: no I/O, safe to unit test.
  */
 import { createHash } from "node:crypto";
+import { ALEX_IDENTIFIERS, demoIdentifiers } from "./demo-documents";
 import { DEMO_EVIDENCE, DEMO_OPPORTUNITY, DEMO_REQUIREMENTS, DEMO_WORKER, type DemoEvidence } from "./demo-data";
 
 const SLUG = /^[a-z0-9](?:[a-z0-9-]{1,38})[a-z0-9]$/;
@@ -31,6 +32,12 @@ export interface DemoPlan {
 export const DEFAULT_SYNTHETIC_SUMMARY =
   "Fictional demo technician (synthetic data): residential heat-pump installation and startup, with EPA 608 certification.";
 
+function swapIdentifier(n: string | null, ids: { training: string; epa: string }): string | null {
+  if (n === ALEX_IDENTIFIERS.training) return ids.training;
+  if (n === ALEX_IDENTIFIERS.epa) return ids.epa;
+  return n;
+}
+
 /** No slug: the original Alex plan, unchanged. A slug: a distinct fictional worker. */
 export function planDemoWorker(opts: { slug?: string; name?: string; summary?: string }): DemoPlan {
   if (!opts.slug) {
@@ -39,11 +46,17 @@ export function planDemoWorker(opts: { slug?: string; name?: string; summary?: s
   const { slug } = opts;
   if (!SLUG.test(slug)) throw new Error("DEMO_WORKER_SLUG must be 3-40 characters: lowercase letters, digits and hyphens.");
   if (slug === "alex-morgan") throw new Error("alex-morgan is the existing demo worker; choose a different DEMO_WORKER_SLUG.");
+  const ids = demoIdentifiers(slug);
   const name = opts.name?.trim();
   if (!name) throw new Error("DEMO_WORKER_NAME is required with DEMO_WORKER_SLUG.");
   const plan: DemoPlan = {
     worker: { id: derivedId(slug, DEMO_WORKER.id), name: name.slice(0, 300), trade: DEMO_WORKER.trade, summary: (opts.summary?.trim() || DEFAULT_SYNTHETIC_SUMMARY).slice(0, 1000) },
-    evidence: DEMO_EVIDENCE.map((e) => ({ ...e, id: derivedId(slug, e.id) })),
+    // Certificate numbers are the worker's own, matching the numbers printed on that worker's documents.
+    evidence: DEMO_EVIDENCE.map((e) => ({
+      ...e,
+      id: derivedId(slug, e.id),
+      structuredData: { ...e.structuredData, credentialNumber: swapIdentifier(e.structuredData.credentialNumber, ids) },
+    })),
     opportunity: { ...DEMO_OPPORTUNITY, id: derivedId(slug, DEMO_OPPORTUNITY.id) },
     requirements: DEMO_REQUIREMENTS.map((r) => ({ ...r, id: derivedId(slug, r.id) })),
     isOriginal: false,

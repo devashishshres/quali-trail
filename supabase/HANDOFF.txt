@@ -142,3 +142,10 @@ REHEARSAL-1 RESULT (development project ighnwgkqvajfkhmopttg, 2026-11-14)
 - A first scripted attempt did not save the checklist because the test script navigated away before the save finished (a script bug, not an app failure). No duplicate or partial record resulted.
 - rehearsal-1 is now consumed (3 of 4). Create rehearsal-2 for judging with the commands in README.md ("Rehearsal workers already used").
 - Migration-history repair is still pending: the recorded versions must be read through a database or CLI connection first.
+
+
+REHEARSAL DOCUMENT ATTRIBUTION (branch fix/rehearsal-document-attribution)
+-------------------------------------------------------------------------
+Problem: rehearsal workers had their own database ids but received PDFs naming Alex Morgan (and Alex's certificate numbers), and the live-upload checklist named Alex.
+Fix (code only; nothing live was changed): supabase/seed/demo-documents.ts generates each worker's PDFs from the worker's name and slug, with deterministic worker-specific certificate numbers; files go in files/<slug>/ and upload/<slug>/; Alex's top-level originals are byte-identical to before (tested). seed-demo.ts runs supabase/seed/attribution.ts first (names, identifiers, stored metadata vs printed text) and stops before writing if anything is inconsistent, uploads the worker's own files hashed from their actual bytes, and prints the exact checklist path to upload.
+Existing live records needing repair (NOT repaired): Jordan Rivera (rehearsal-1) has three stored originals naming Alex Morgan (EPA card, training certificate, and the live-uploaded commissioning checklist), credential numbers copied from Alex on the EPA and training records, extracted metadata on the checklist that names Alex, and Supermemory documents built from that metadata. Sam Okafor (rehearsal-2) has not been seeded. Preferred demo approach: seed rehearsal-2 fresh with the corrected documents.

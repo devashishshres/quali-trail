@@ -77,22 +77,12 @@ Never replay `init.sql` against a populated project. Check what is installed wit
 Seed scripts use the service-role key and write to whatever project `.env.local` points at. Run them only against a development project.
 
 ```bash
-npm run seed:pdfs      # regenerate the fictional PDFs (no network)
+npm run seed:pdfs      # regenerate Alex Morgan's fictional PDFs (no network); see below for other workers
 npm run seed:demo      # original fictional worker, Alex Morgan (fixed ids)
 npm run seed:index     # index that worker's records into Supermemory
 ```
 
-A **new, separate fictional worker** for rehearsals (its own account, ids and memory namespace; Alex's rows are never touched):
-
-```bash
-DEMO_WORKER_SLUG=rehearsal-1 DEMO_WORKER_NAME="Jordan Rivera" \
-DEMO_USER_EMAIL=jordan.rivera@demo.qualitrail.dev npm run seed:demo
-DEMO_WORKER_SLUG=rehearsal-1 DEMO_WORKER_NAME="Jordan Rivera" npm run seed:index
-```
-
-Use a new slug for every rehearsal; nothing needs deleting or resetting.
-
-**Rehearsal workers already used in the development project.** `rehearsal-1` (Jordan Rivera) has had the commissioning checklist uploaded, so it now shows 3 of 4 and uploading the same file again is detected as a duplicate. Do not reuse it for a 2-of-4 start. For judging or another rehearsal, create a fresh one (this needs the `workers.summary` migration applied first):
+A **new, separate fictional worker** for rehearsals gets its own account, ids, memory namespace **and its own documents**. Alex's rows and original PDFs are never touched.
 
 ```bash
 DEMO_WORKER_SLUG=rehearsal-2 DEMO_WORKER_NAME="Sam Okafor" \
@@ -100,13 +90,24 @@ DEMO_USER_EMAIL=sam.okafor@demo.qualitrail.dev npm run seed:demo
 DEMO_WORKER_SLUG=rehearsal-2 DEMO_WORKER_NAME="Sam Okafor" npm run seed:index
 ```
 
-Sign in with that email and the shared demo password from your local environment. Each new slug (`rehearsal-3`, ...) needs its own name and email address.
+`seed:demo` first generates that worker's PDFs and checks that every page and every stored field names the right person and carries that worker's own certificate numbers (it stops before writing anything if not). It then uploads the worker's two historical originals, hashing the actual file bytes, and prints the exact path of the checklist to upload live:
+
+```
+supabase/seed/files/<slug>/                 historical originals (training certificate, EPA 608 card)
+supabase/seed/upload/<slug>/demo-commissioning-checklist.pdf    UPLOAD THIS ONE during the demonstration
+```
+
+Upload only the checklist from the worker's own `upload/<slug>/` folder. The top-level `supabase/seed/upload/demo-commissioning-checklist.pdf` is Alex Morgan's and names him. To (re)generate documents without seeding: `DEMO_WORKER_SLUG=... DEMO_WORKER_NAME="..." npm run seed:pdfs`. The per-worker folders are generated, git-ignored files.
+
+Use a new slug, name and email for every rehearsal; nothing needs deleting or resetting. Slugs are lowercase letters, digits and hyphens.
+
+**Rehearsal workers already in the development project.** `rehearsal-1` (Jordan Rivera) was seeded before per-worker documents existed: its stored originals and checklist name Alex Morgan and reuse Alex's certificate numbers, and it already shows 3 of 4. Do not use it for judging or for a 2-of-4 start. Use `rehearsal-2` or a later slug.
 
 ### Demo runbook: 2 of 4, then 3 of 4
 
 1. Sign in as the rehearsal worker. Passport shows four historical records and the technician summary.
 2. Opportunities, **Run matching**. Expect EPA 608 and manufacturer training *evidence found*, installation/startup *needs review*, commissioning checklist *no sufficient evidence* (2 of 4).
-3. My Evidence, upload `supabase/seed/upload/demo-commissioning-checklist.pdf`, review the extracted fields, confirm, wait for "Searchable in memory".
+3. My Evidence, upload the checklist from that worker's own folder, `supabase/seed/upload/<slug>/demo-commissioning-checklist.pdf` (the exact path is printed by `seed:demo`), review the extracted fields, confirm, wait for "Searchable in memory".
 4. **Run matching again.** Commissioning becomes *evidence found* (3 of 4) and a "what changed" box appears.
 5. Reports, **Print or save as PDF**.
 
