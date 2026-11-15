@@ -1,9 +1,10 @@
 # Job import (feature-flagged, off by default)
 
-## HANDOFF (2026-11-15): read this first on a new laptop
+## HANDOFF (updated 2026-11-15): read this first
 
-**Branch:** `feature/job-import` (draft PR #11, unmerged). **Final implementation commit:** `629a7a9`
-(`d856bd0` feature, `629a7a9` follow-up checks). The commit after that only adds this handoff.
+**Branch:** `feature/job-import` (draft PR #11, unmerged). **Final implementation commit:** `552ef01`
+(`d856bd0` feature, `629a7a9` follow-up checks, `552ef01` "Your next steps"). Later commits only update this handoff.
+Work continues on the original Mac; the other-laptop transfer is no longer needed.
 
 ### Status
 
@@ -12,37 +13,25 @@ Done (on the branch, flag off by default):
   (priority, display wording, remove, manual-review mark); atomic confirm; "Your evidence fit" summary; report.
 - Deterministic rule catalog, `cannot_assess` everywhere, priority read from listing wording, headline-only term
   matching (install-only evidence never satisfies install-and-startup), plain-text listings, flag-off behaviour.
+- **"Your next steps"** (see the section below): fit summary, selected requirement and printable report.
 
-Pending:
-1. **"Your next steps"** (requested, NOT started; no code written). Add to the evidence-fit view
-   (`components/opportunities/fit-summary.tsx`, which replaces its "Documentation you could add" list) and the
-   printable report (`app/(dashboard)/reports/page.tsx`). Deterministic guidance per requirement from its actual
-   assessment reason, with no AI call, course search or hiring prediction, and never implying the worker lacks a skill:
-   - Missing document → "upload it if you already hold it" (link `/evidence`).
-   - Incomplete work details → "add or clarify the work performed" (link `/evidence#evidence-<id>`).
-   - Appropriate but self-reported work → link to that record's existing supervisor/customer panels
-     (`/evidence#evidence-<id>`; panels exist only for work_record/checklist with status self_reported or
-     document_supplied, and only when `features.customerSignoff` / `features.supervisorReview` are on in `/api/me`).
-     Never send anything automatically.
-   - `cannot_assess` → "needs manual or employer review", quoting the stored reason (`uncertainties`).
-   Design note from reading the code: reasons are not stored as codes, but every gap string comes from fixed
-   templates in `lib/server/matching/evaluate.ts` that are unchanged since the first commit:
-   `A record that directly documents: …` (missing), `"<title>" does not state <what>.` (incomplete),
-   `A supporting document or independent confirmation for this record` (self-reported, appropriate),
-   the "appear only in this record's summary" uncertainty (ambiguous → clarify). Multi-part lines prefix each with
-   `<part label>: `. Plan: move these templates into one shared module used by both the evaluator and a pure
-   `nextSteps(result)` function, so older saved runs work without a schema change. Test with real evaluator output.
-2. Live provider acceptance test (below). 3. Release (below).
+Pending: the live provider acceptance test, then release (both below; each step needs approval).
 
-### Checks actually run (on 629a7a9, this laptop)
+### Checks actually run (on 552ef01, isolated local stack, all providers stubbed)
 
-- `npm test` 377 passed; `npm run typecheck`, `npm run lint`, `npm run build` clean.
+- `npm test` 394 passed (17 new in `tests/next-steps.test.ts`); typecheck, lint and production build clean.
 - DB tests on the local Supabase CLI Postgres (port 54322): 90/90.
-- `scripts/e2e-import.mts` on the isolated local stack: 49/49 flag on, 10/10 flag off; `scripts/e2e-local.mjs`
-  95/95 flag off (earlier commit, unchanged paths).
-- Limitations: TinyFish and Gemini were stubbed. Supermemory is unavailable locally, so local match runs are labelled
-  fixtures from the real evaluator, not real memory-backed runs. Nothing was run against the hosted project except a
-  read-only check of the test technician's two records (both `indexed`).
+- `scripts/e2e-import.mts`: **57/57** flag on (sign-off/review off), **16/16** flag off (sign-off/review on, simulated
+  email). Both phases ran on the final build with a fresh fictional user. `scripts/e2e-local.mjs` (whole app,
+  including sign-off and supervisor review): **95/95**.
+- Next-steps checks in those runs: one step per gap, required first; the found line has no step; the confirm step
+  offers supervisor/customer only when those flows are on; following its link opens that record's existing panels
+  with **no write requests and no new sign-off or review requests**; the licence line gets manual clarification
+  quoting the stored reason; no lack-of-ability, course or hiring wording; the report prints the section without
+  links; a run stored with older-format strings produces the same steps, and an unknown string is shown as written.
+- **Limitations (stubbed, not live):** TinyFish and Gemini were stubs. Supermemory is unavailable locally, so
+  local match runs are labelled fixtures from the real evaluator, not real memory-backed runs. Nothing touched the
+  hosted project in this round. (Earlier: one read-only check of the test technician's two records, both `indexed`.)
 
 ### Hosted database
 
@@ -108,8 +97,7 @@ Isolated local stack (no hosted data, no providers):
 
 ### Pending approvals and exact next actions
 
-1. Build "Your next steps" (above) on `feature/job-import`; unit tests + e2e on the isolated stack; push; update
-   PR #11; report its checks separately from the live test. Keep PR #11 unmerged.
+1. Done: "Your next steps" (552ef01). Keep PR #11 unmerged.
 2. **Needs approval:** user supplies one public HVAC listing URL and adds `TINYFISH_API_KEY` to `.env.local` themselves.
 3. **Needs approval:** back up hosted DB to `~/qualitrail-backups/<ts>-pre-job-import/` (outside Git), apply
    `20261118100000_job_import.sql` in one transaction, verify schema. Rollback while unused:
@@ -118,7 +106,8 @@ Isolated local stack (no hosted data, no providers):
    only, email/sign-off/review off). Caps: TinyFish 1 fetch (max 2); Gemini ≤3 attempts per draft, ≤6 total;
    Supermemory searches only, ≤2 match runs, no writes. Expected writes: 1 import row, 1 job, N requirements,
    1–2 match runs, rate-limit rows; no emails, no evidence changes, no cleanup. Verify wording, priorities, honest
-   `cannot_assess` lines (do not broaden the catalog), evidence links, printable report.
+   `cannot_assess` lines (do not broaden the catalog), evidence links, "Your next steps" against the real run
+   (do not click Request/Send in any panel), printable report.
 5. **Each needs separate approval:** Vercel variables with the flag off → merge PR #11 → deploy → enable the flag.
 
 A technician pastes a public job-listing link (or the listing text). QualiTrail retrieves that one page, drafts the
@@ -200,6 +189,25 @@ Plain-text listings (no Markdown) are supported: a line counts as a heading only
 Benefits/About-style sections are excluded. The technician can change priority on review; the listing's priority is
 kept next to it.
 
+## Your next steps (deterministic guidance)
+
+`lib/next-steps.ts` turns a SAVED requirement result into steps. No model call, no course search, no prediction,
+no schema change. It reads the assessment, the linked records and the gap messages; the evaluator writes those
+messages through the same module's templates (unchanged text), so older saved runs give the same guidance.
+
+| Stored reason | Step |
+|---|---|
+| `A record that directly documents: …` | Upload a document you already hold (My Evidence). Expired-only → "upload the current version". |
+| `"<title>" does not state <what>.` | Clarify the work details: edit that record (link opens it). |
+| Summary-only uncertainty | Clarify: add the work to the record's work performed. |
+| `A supporting document or independent confirmation for this record` | Upload a supporting document; when sign-off/review are on and the record is a work record or checklist, ask a supervisor or customer from the record's page. Nothing is sent until the person submits a request there. |
+| `cannot_assess` | Clarify manually: compare with your records or ask the employer; quotes the stored reason. |
+| Unrecognised stored text | Shown as written, not interpreted. |
+
+Documentation found → no step. The same step for several parts of one line is shown once, naming the parts. Every
+section carries: "A missing or incomplete record says nothing about your ability." Links appear on screen only;
+the printed report keeps the text.
+
 ## Review edits
 
 - The employer's wording, excerpt and original priority never change.
@@ -224,7 +232,7 @@ result exists). `opportunity_import_expire()` clears expired drafts; no schedule
 ## Checks
 
 - Unit: `tests/opportunities/requirement-rules.test.ts`, `tests/matching/evaluate-rules.test.ts`,
-  `tests/imports/*.test.ts` (URL/DNS, TinyFish client, verbatim check, orchestration).
+  `tests/imports/*.test.ts` (URL/DNS, TinyFish client, verbatim check, orchestration), `tests/next-steps.test.ts`.
 - Database (disposable Postgres): `tests/db/job-import.test.ts` (concurrent lease and confirm, expiry, ownership,
   browser-role denial, `cannot_assess` through `finalize_match_run`, rollback).
 - Browser (isolated local stack, stub): `scripts/e2e-import.mts` (URL and pasted plain-text journeys through to
