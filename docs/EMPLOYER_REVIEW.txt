@@ -1,8 +1,7 @@
 # Employer review portal: design and handoff
 
-Status: built on `feature/employer-review` behind `EMPLOYER_REVIEW_ENABLED` (off by default). Not applied to any hosted
-database, not deployed, no real email sent. Revision 2 narrows what can be shared (below). Coordinate with the open
-bug-fix work before release.
+Status: built on `feature/employer-review` behind `EMPLOYER_REVIEW_ENABLED` (off by default). Revision 2 narrows what
+can be shared (below). Hosted migration applied 2026-11-15 (approved); feature off in Production.
 
 ## Intent
 
@@ -98,9 +97,19 @@ private and are counted as "withheld" in the technician's picker, with an honest
 - Masked address hints keep the domain (same as supervisor invitations).
 - Default expiry 7 days (choices 3/7/14/30); 10 shares/hour and 20/day per technician.
 
-## Release steps (each needs separate approval)
+## Unresolved (not fixed by this work)
 
-1. Coordinate with the partner's bug-fix PR; rebase if needed.
-2. Apply the migration to the hosted database.
-3. Set `EMPLOYER_REVIEW_ENABLED=true` (Preview first) and run a live test with fictional identities and real email.
-4. Merge and deploy.
+- **Seven main-branch findings** from an earlier review remain open. The planned partner bug-fix PR is not being prepared,
+  so they are NOT fixed and release no longer waits on them. This PR does not address them.
+
+## Release record
+
+1. Done (approved): hosted migration `20261120100000_employer_review.sql` on `ighnwgkqvajfkhmopttg`. Backup (roles,
+   schema, data, migration history, demo fingerprints) in `~/qualitrail-backups/20261115T155711Z-pre-employer-review/`.
+   Dry run listed only this file; history matched before and after; the only changed existing objects are the two
+   widened email-delivery checks; browser roles are denied on all new tables and functions; demo fingerprints and table
+   counts identical.
+2. Controlled Preview test (approved; Preview-only settings, protected Preview, at most seven real emails). Expiry is
+   verified locally with simulated time only, never live.
+3. Conditional merge with `EMPLOYER_REVIEW_ENABLED=false` in Production (approved only if step 2 passes).
+4. Not approved yet: enabling employer sharing in Production.
