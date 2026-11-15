@@ -108,7 +108,10 @@ Verification (local)
 - typecheck and lint: pass. Production build: pass.
 - Tests: 175 total = 136 application tests + 39 database tests (run against a disposable local PostgreSQL 16 at 127.0.0.1:55432). Without TEST_DATABASE_ADMIN_URL the 39 database tests are skipped, not failed.
 - Live extraction (authorised): the fictional HVAC service-record PDF returned type work_record, no credential number and no expiry, in about 2 seconds, using the existing local Gemini configuration. This result passes through both the prompt rule and the normalization guard, so it does not isolate which layer did it; the guard is covered by unit tests.
-- Not run: migration against the development Supabase project, live seeds, hosted deployment, browser walkthrough of the new UI text.
+- Browser pass (headless Chrome driven by script, production build on port 3100, against the development project BEFORE the summary migration): sign-in, Passport (no summary, no error), My Evidence (5 records, all searchable), extraction review of the fictional service-record PDF (type work_record, credential number empty), existing saved run readable, a new run completed in about 4 s, constellation explanations for three requirements, packet with Issuer column, print rendering, no console errors and no failed requests. The run created one new saved match run for Alex Morgan; no evidence records were created or changed (the extraction draft was not confirmed). Print was checked with print media emulation, not a physical print dialog.
+- Live extraction of the fictional certification and training PDFs kept their printed numbers (DEMO-608-000123, NW-TRN-2025-0314-DEMO).
+- Found and fixed in that pass: the packet repeated one uncertainty sentence per requirement; it now lists each once.
+- Not run: migration against the development Supabase project, live seeds, hosted deployment, a physical print dialog, a human-driven browser session.
 
 Pending external actions (each needs separate approval; none has been done)
 1. Apply 20261115120000_worker_summary.sql to the development Supabase project through the SQL editor.
