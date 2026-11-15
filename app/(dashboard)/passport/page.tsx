@@ -32,6 +32,7 @@ export default function PassportPage() {
             <p className="text-sm font-semibold text-slate">Trade passport</p>
             <h1 className="font-display text-5xl font-semibold leading-none tracking-tight sm:text-7xl">{worker.name}</h1>
             <p className="mt-2 text-lg font-medium">{worker.trade}</p>
+            {worker.summary && <p className="mt-3 max-w-prose text-base text-slate">{worker.summary}</p>}
             {worker.isSynthetic && (
               <div className="mt-3">
                 <FictionalTag />

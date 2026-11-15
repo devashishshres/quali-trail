@@ -14,7 +14,7 @@ Rules:
 - Report only what the document explicitly states. If a value is not stated, return null (or an empty list). NEVER guess or infer.
 - Dates must be YYYY-MM-DD. If only a month or year is printed, return null for the date.
 - expirationDate: only if the document itself prints an expiry or "valid until" date. Many credentials never expire; do not invent one.
-- credentialNumber: exactly as printed, else null.
+- credentialNumber: only a number that a certifying or training body issued to the person and printed as a certificate, license, card or credential number, copied exactly. Work-order, job, ticket, service, record, checklist, invoice or reference IDs are NOT credential numbers. If the document says there is no credential number, or only shows such an ID, return null.
 - Never describe a record as verified, authentic or confirmed.
 - type is one of: certification, training, work_record, checklist, experience_note, other.
 - List in uncertainFields any of type, title, date, issuer, expirationDate, credentialNumber that you are not confident about.

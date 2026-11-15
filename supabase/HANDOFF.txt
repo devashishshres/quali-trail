@@ -10,7 +10,6 @@ The core live workflow is working with fixture mode off:
 
 Sign in → view historical evidence → match the seeded job → upload the fictional commissioning PDF → real Gemini extraction → edit the review → confirm → private storage → completed Supermemory indexing → rerun matching → saved qualification report → print preview.
 
-Safari is left signed in on Opportunities with the commissioning requirement selected. The temporary test browser was closed.
 
 ## Separate development services
 
@@ -56,7 +55,7 @@ Before rerunning, the old packet correctly became stale, showed a printable warn
 
 ## Verification
 
-- Full suite: **147 tests passed, 0 skipped** (113 unit + 34 database tests against a disposable local PostgreSQL 16). Without TEST_DATABASE_ADMIN_URL the 34 database tests are skipped (113 pass).
+- Historical (main at d9b5341): 147 tests (113 unit + 34 database). Current counts are in the MVP COMPLETION section below.
 - Typecheck and lint: clean.
 - Production build: passed, including TypeScript checking.
 - Lint: passed.
@@ -71,7 +70,7 @@ Before rerunning, the old packet correctly became stale, showed a printable warn
 
 ## Handoff and limits
 
-Changes are committed locally on `our-version`. Nothing was pushed to GitHub, merged to main or deployed.
+The tested version is on `main` (merged through pull request #2). Later work is on the local branch `feature/mvp-completion`; see the section below for what is and is not pushed. Nothing is deployed.
 
 This is the core hackathon MVP: a provisioned demo account and seeded opportunity. TinyFish import, Copilot, Maritime and Grok Bot were not added. Real-provider outage/retry behavior has not been exhaustively failure-injected, and this is not a production security certification.
 
@@ -91,3 +90,42 @@ with a 15-second client deadline each. Invalid credentials/input and malformed
 output do not trigger model hopping. Exhausted models retain manual review.
 SDK retries are disabled so a slow model cannot consume the fallback window.
 Client cancellation does not guarantee provider-side cancellation or no charge.
+
+
+MVP COMPLETION (branch feature/mvp-completion, local only)
+----------------------------------------------------------
+Scope: finish the existing hackathon MVP. Organizations, reviewer accounts, sharing grants, evidence edit/delete and other extensions are deferred.
+
+Changes
+- Extraction: the prompt now defines a credential number as one issued to the person and printed as a certificate/license/card number; work-order, record, ticket and checklist IDs are not. normalize.ts additionally nulls credentialNumber for work records, checklists and experience notes, and, for typed text, drops a number the text never shows. Genuine certificate numbers on certifications and training are kept. The record's own ID stays in the source document; no new field was added.
+- Explanations (lib/server/matching/explain.ts, wired into evaluate.ts): deterministic wording from stored facts only. Each connection says what that record states, who issued it, when, and how it was supplied. Requirement-level text lists the records considered together and says that being listed together does not show the same job or independent review. Unmet criteria appear once per requirement (missingDocumentation/uncertainties), not on every connection. No AI calls were added.
+- Packet: evidenceIssuer added to EvidenceConnection (nullable, default null; read live from the evidence row, so previously saved runs show it too). Technician summary on Passport and the packet, labelled as the worker's own words and not verified.
+- Profile: migration 20261115120000_worker_summary.sql adds nullable workers.summary. Reading it is separate from sign-in and returns nothing if the column is absent, so the code is safe to run before the migration is applied. There is no worker-facing editor yet; the summary is set by the seed.
+- Demo: supabase/seed/synthetic-worker.ts derives separate ids per DEMO_WORKER_SLUG, so a new fictional worker never overwrites Alex Morgan (whose ids are fixed). seed-demo.ts and index-demo.ts use it. Without a slug they behave as before.
+- Docs: README.md, .env.example, and .gitignore exceptions for both (they were ignored by *.md and .env*).
+
+Verification (local)
+- typecheck and lint: pass. Production build: pass.
+- Tests: 175 total = 136 application tests + 39 database tests (run against a disposable local PostgreSQL 16 at 127.0.0.1:55432). Without TEST_DATABASE_ADMIN_URL the 39 database tests are skipped, not failed.
+- Live extraction (authorised): the fictional HVAC service-record PDF returned type work_record, no credential number and no expiry, in about 2 seconds, using the existing local Gemini configuration. This result passes through both the prompt rule and the normalization guard, so it does not isolate which layer did it; the guard is covered by unit tests.
+- Not run: migration against the development Supabase project, live seeds, hosted deployment, browser walkthrough of the new UI text.
+
+Pending external actions (each needs separate approval; none has been done)
+1. Apply 20261115120000_worker_summary.sql to the development Supabase project through the SQL editor.
+2. Seed a rehearsal worker (writes to the development project and to Supermemory).
+3. Reconcile CLI migration history (read-only check first; see README).
+4. Rotate keys that were pasted into chat, then update local and hosted settings.
+5. Create the hosting project, set server-only variables, set Supabase Auth redirect URLs, configure route time limits, deploy, and run the hosted journey.
+
+Submission checklist (items marked USER need your action)
+- Hosted URL loads; signed-out visit redirects to sign-in. (after deployment)
+- Hosted journey recorded: sign in, 2 of 4, upload checklist, indexed, 3 of 4, print. (after deployment)
+- USER: final screenshots of Passport, Evidence Constellation and the packet.
+- USER: backup screen recording of the full journey in case of provider outage.
+- USER: rehearse once end to end with a fresh rehearsal worker (a new slug each time).
+- USER: read the official rules for deadlines, eligibility and required fields. Do not rely on this file for them.
+- State only what ran: Supabase, Supermemory and Gemini were exercised live; TinyFish, Copilot, Grok Bot and Maritime were not built.
+- State the limits: one seeded fictional job, tailored matching rules, no reviewer workflow, supplied documents are not independently confirmed.
+
+If snapshot sharing is added later
+A saved match-run id alone does not freeze anything: explanation text is stored, but title, date, type, verification and issuer are read live from the evidence row; evidence can be edited in place (the version bump marks runs stale but the old content is gone); original files can be replaced or removed. A real share would need a snapshot written at share time (evidence metadata, version and file hash, plus copies of originals at snapshot-specific storage paths), shown as superseded after later edits, and deleted when the worker deletes the evidence or revokes the share.

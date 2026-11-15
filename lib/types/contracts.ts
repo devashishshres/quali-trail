@@ -102,6 +102,8 @@ export const Worker = z.object({
   id: Id,
   name: ShortText,
   trade: ShortText,
+  /** Worker-authored career summary. Null until one is set (older rows and records stay valid). */
+  summary: z.string().max(1000).nullable().default(null),
   isSynthetic: z.boolean(),
 });
 export type Worker = z.infer<typeof Worker>;
@@ -250,6 +252,8 @@ export const EvidenceConnection = z.object({
   evidenceTitle: ShortText,
   evidenceDate: IsoDate.nullable(),
   evidenceType: EvidenceType,
+  /** Issuer as stored on the record (read live, so older saved runs show it too). Not proof of authenticity. */
+  evidenceIssuer: ShortText.nullable().default(null),
   verificationStatus: VerificationStatus,
   role: EvidenceRole,
   /** What this record contributes, e.g. "Shows startup testing on a heat pump". */

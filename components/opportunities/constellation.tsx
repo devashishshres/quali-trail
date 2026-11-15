@@ -142,6 +142,7 @@ function Contribution({ c, active, onSelect }: { c: EvidenceConnection; active: 
       <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate">
         <span>{formatDate(c.evidenceDate)}</span>
         <span>{TYPE_LABEL[c.evidenceType]}</span>
+        {c.evidenceIssuer && <span>Issuer: {c.evidenceIssuer}</span>}
         <span className="font-medium text-navy">{c.role === "direct" ? "Could satisfy on its own" : "Related, partial"}</span>
         {c.memorySimilarity !== null && <span>Retrieval similarity: {Math.round(c.memorySimilarity * 100)}%</span>}
       </p>

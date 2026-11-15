@@ -24,6 +24,9 @@ const isoDate = (v: unknown): string | null => {
   return Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s ? null : s;
 };
 
+/** These record types carry their own IDs (work orders, checklist numbers), which are not credential numbers. */
+const NO_CREDENTIAL_NUMBER = new Set<string>(["work_record", "checklist", "experience_note"]);
+
 const FIELDS = ["type", "title", "date", "issuer", "expirationDate", "credentialNumber"] as const;
 
 /** Returns a valid ExtractedEvidence, or null if the output is unusable. */
@@ -51,6 +54,15 @@ export function normalizeExtraction(raw: unknown, sourceText?: string): Extracte
     }
   }
 
+  // A work record's own ID is not a credential number. For typed text, also require the
+  // number to appear in the source: an unseen number is a guess.
+  let credentialNumber = trimOrNull(sd.credentialNumber, 100);
+  if (credentialNumber && type.success && NO_CREDENTIAL_NUMBER.has(type.data)) credentialNumber = null;
+  if (credentialNumber && sourceText && !sourceText.includes(credentialNumber)) {
+    credentialNumber = null;
+    uncertain.add("credentialNumber");
+  }
+
   const candidate = {
     type: type.success ? type.data : null,
     title: trimOrNull(r.title, 300),
@@ -61,7 +73,7 @@ export function normalizeExtraction(raw: unknown, sourceText?: string): Extracte
       activities: list(sd.activities),
       equipment: list(sd.equipment),
       expirationDate,
-      credentialNumber: trimOrNull(sd.credentialNumber, 100),
+      credentialNumber,
       summary: trimOrNull(sd.summary, 2000),
     },
     uncertainFields: [...uncertain],

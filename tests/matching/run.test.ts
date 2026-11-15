@@ -147,7 +147,7 @@ describe("executeMatch", () => {
 describe("computeChanges", () => {
   const res = (id: string, assessment: RequirementResult["assessment"], ev: string[] = []): RequirementResult => ({
     requirementId: id, originalText: "", mandatory: true, assessment, explanation: "", uncertainties: [], missingDocumentation: [],
-    connections: ev.map((evidenceId) => ({ evidenceId, evidenceTitle: "t", evidenceDate: null, evidenceType: "other", verificationStatus: "self_reported", role: "direct", contribution: "", relevanceExplanation: "", memorySimilarity: null })),
+    connections: ev.map((evidenceId) => ({ evidenceId, evidenceTitle: "t", evidenceDate: null, evidenceType: "other", evidenceIssuer: null, verificationStatus: "self_reported", role: "direct", contribution: "", relevanceExplanation: "", memorySimilarity: null })),
   });
 
   it("reports only changed assessments, with the newly linked records", () => {
