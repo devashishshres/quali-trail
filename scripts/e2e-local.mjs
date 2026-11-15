@@ -93,6 +93,20 @@ try {
   await E.waitForFunction(() => location.pathname === "/passport");
   check("existing worker signs in straight to Passport (no onboarding)", (await E.url()).endsWith("/passport"));
 
+  /* ---------------------------------------------------------------- browser protections */
+  for (const path of ["/sign-in", "/passport", "/signoff", "/forgot-password", "/api/me"]) {
+    const r = await fetch(`${APP}${path}`, { redirect: "manual" });
+    check(`anti-framing headers on ${path}`, r.headers.get("x-frame-options") === "DENY" && (r.headers.get("content-security-policy") ?? "").includes("frame-ancestors 'none'") && r.headers.get("x-content-type-options") === "nosniff");
+  }
+  const framed = await E.evaluate(async (app) => {
+    const f = document.createElement("iframe");
+    f.src = `${app}/sign-in`; // same browser, but the header forbids framing outright
+    document.body.appendChild(f);
+    await new Promise((r) => setTimeout(r, 1500));
+    try { return f.contentDocument?.body?.innerText?.includes("Sign in") ?? false; } catch { return false; }
+  }, APP);
+  check("the app refuses to render inside a frame", framed === false);
+
   /* ---------------------------------------------------------------- not on the allowlist */
   const outsider = await persona("outsider");
   const outEmail = `outsider.${run}@not-allowed.example`;
@@ -287,13 +301,32 @@ try {
   await SV.waitForFunction(() => document.body.innerText.includes("You're connected"));
   check("invited supervisor accepts after signup and profile setup", true);
   await shot(SV, "04-supervisor-accepted");
+  const supToken = supLink.split("#t=")[1];
+  const answer = (p, accept) => p.evaluate(async (t, accept) => { const r = await fetch("/api/supervisor/invite/answer", { method: "POST", headers: { "Content-Type": "application/json", "x-signoff-token": t }, body: JSON.stringify({ accept }) }); return { status: r.status, body: await r.json() }; }, supToken, accept);
+  const retry = await answer(SV, true);
+  check("repeating the acceptance returns already-accepted", retry.status === 200 && retry.body.repeated === true && retry.body.status === "accepted", JSON.stringify(retry));
+  const lateForward = await answer(X, true);
+  check("after acceptance the link does nothing for another account", lateForward.status !== 200 && lateForward.body.error?.reason === "accepted", JSON.stringify(lateForward));
+  const { data: relRow } = await admin.from("supervisor_relationships").select("token_hash, invited_email").eq("worker_id", wrow.id).eq("status", "accepted").single();
+  check("no live invitation token or address kept after acceptance", relRow.token_hash === null && relRow.invited_email === null);
+  // An invitation leads only to a reviewer profile.
+  const svMe = await SV.evaluate(async () => (await fetch("/api/me")).json());
+  const svWorker = await SV.evaluate(async () => (await fetch("/api/onboarding", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role: "worker", name: "Sky", trade: "HVAC" }) })).status);
+  check("invited supervisor cannot create a technician profile", svMe.canOnboardWorker === false && svWorker === 403, `status ${svWorker}`);
+  await SV.goto(`${APP}/onboarding`, { waitUntil: "networkidle0" });
+  await SV.waitForFunction(() => document.body.innerText.includes("Technician profiles are open only"));
+  check("onboarding shows no technician form to an invited supervisor", !(await SV.$("input[name=trade]")));
 
   /* ---------------------------------------------------------------- supervisor review */
   await openRecord(jobTitle);
   await W.waitForSelector("section[aria-label='Supervisor review'] select[name=relationship]");
+  const sharing = await W.$eval("[data-testid=review-sharing]", (el) => el.innerText);
+  check("before sending, the worker is told exactly what the supervisor will see", sharing.includes("What the supervisor will see") && sharing.includes("no uploaded document"));
   await clickText(W, "Ask for review");
   await W.waitForFunction(() => document.body.innerText.includes("Awaiting supervisor"));
   check("worker sends the job to the accepted supervisor", true);
+  const { data: sentReq } = await admin.from("review_requests").select("has_original").eq("worker_id", wrow.id).single();
+  check("no document is shared unless the worker chose to", sentReq.has_original === false);
   const notice = await waitFor(async () => outbox("review_notification", supEmail));
   const reviewUrl = notice?.text.match(/https?:\/\/\S+\/supervisor\/reviews\/[0-9a-f-]+/)?.[0];
   check("notification links to an authenticated page and states it approves nothing", !!reviewUrl && notice.text.includes("does not approve anything"));
@@ -408,6 +441,69 @@ try {
   check("packet keeps the simulated acknowledgment visibly simulated and flags the change", packet.includes("Changed since simulated acknowledgment") && packet.includes("Simulated (no real email was sent)"));
   check("packet never shows the customer address or typed signature", !packet.includes(customerEmail) && !packet.includes("Casey Customer") && !packet.includes("casey"));
   await shot(W, "07-packet");
+
+  /* ---------------------------------------------------------------- password recovery */
+  const recoveryLink = (email, notThis) => waitFor(async () => {
+    const s = await (await fetch(`${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:"${email}"`)}`)).json();
+    for (const msg of s.messages ?? []) {
+      const m = await (await fetch(`${MAILPIT}/api/v1/message/${msg.ID}`)).json();
+      const l = (m.Text || m.HTML || "").match(/https?:\/\/[^\s"<>]+\/auth\/v1\/verify[^\s"<>]+/)?.[0]?.replace(/&amp;/g, "&");
+      if (l && l.includes("type=recovery") && l !== notThis) return l;
+    }
+    return null;
+  });
+  const requestReset = async (p, email) => {
+    await p.goto(`${APP}/forgot-password`, { waitUntil: "networkidle0" });
+    await fill(p, "input[name=email]", email);
+    await clickText(p, "Email me a reset link");
+    await p.waitForFunction(() => document.body.innerText.includes("Check your email"));
+  };
+  const signInPage = await persona("sign-in-page");
+  await signInPage.goto(`${APP}/sign-in`, { waitUntil: "networkidle0" });
+  check("sign-in links to password reset", (await text(signInPage)).includes("Forgot password?"));
+  const R = await persona("recovery");
+  await requestReset(R, existingEmail);
+  const link1 = await recoveryLink(existingEmail);
+  check("a reset email arrives (local mail catcher)", !!link1);
+  const R2 = await persona("other-browser");
+  await R2.goto(link1, { waitUntil: "networkidle0" });
+  check("a reset link opened in another browser is refused with an explanation", (await R2.url()).includes("/forgot-password?error=browser") && (await text(R2)).includes("browser that requested it"));
+  await R.goto(link1, { waitUntil: "networkidle0" });
+  check("a used reset link is reported as expired", (await R.url()).includes("/forgot-password?error=expired") && (await text(R)).includes("expired or was already used"));
+  await requestReset(R, existingEmail);
+  const link2 = await recoveryLink(existingEmail, link1);
+  await R.goto(link2, { waitUntil: "networkidle0" });
+  await R.waitForSelector("input[name=confirm]");
+  check("a fresh reset link opens the new-password form", (await R.url()).endsWith("/reset-password"));
+  // An ordinary signed-in session can't change the password without a reset link.
+  await E.goto(`${APP}/reset-password`, { waitUntil: "networkidle0" });
+  await E.waitForFunction(() => document.body.innerText.includes("This reset link has expired"));
+  const noMarker = await E.evaluate(async () => (await fetch("/api/auth/reset-password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: "Another-password-123" }) })).status);
+  check("a normal session without a reset link cannot set a password", noMarker === 403, `status ${noMarker}`);
+  const newPw = `New-${randomUUID()}`;
+  await fill(R, "input[name=password]", newPw);
+  await fill(R, "input[name=confirm]", newPw);
+  await clickText(R, "Set new password");
+  await R.waitForFunction(() => document.body.innerText.includes("Password changed"));
+  check("password changed through the reset form", true);
+  const reuse = await R.evaluate(async () => (await fetch("/api/auth/reset-password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: "Yet-another-password-1" }) })).status);
+  check("the reset permission is used up after one change", reuse === 403, `status ${reuse}`);
+  const otherSession = await E.evaluate(async () => (await fetch("/api/me")).status);
+  check("other sessions are signed out after a reset", otherSession === 401, `status ${otherSession}`);
+  const S2 = await persona("signin-after-reset");
+  await S2.goto(`${APP}/sign-in`, { waitUntil: "networkidle0" });
+  await fill(S2, "input[name=email]", existingEmail); await fill(S2, "input[name=password]", pw);
+  await clickText(S2, "Sign in");
+  await S2.waitForFunction(() => document.body.innerText.includes("Sign-in failed"));
+  await fill(S2, "input[name=password]", newPw);
+  await clickText(S2, "Sign in");
+  await S2.waitForFunction(() => location.pathname === "/passport");
+  check("old password refused, new password signs in", (await S2.url()).endsWith("/passport"));
+  for (const [q, want] of [["code=bogus&next=%2F%2Fevil.test", "/sign-in"], ["error=access_denied&error_code=otp_expired&next=%2Freset-password", "/forgot-password?error=expired"], ["next=https%3A%2F%2Fevil.test", "/sign-in"]]) {
+    const r = await fetch(`${APP}/auth/confirm?${q}`, { redirect: "manual" });
+    const loc = new URL(r.headers.get("location"), APP);
+    check(`email-link callback stays on this site (${q.split("&")[0]})`, loc.origin === new URL(APP).origin && (loc.pathname + loc.search).startsWith(want), loc.href);
+  }
 
   /* ---------------------------------------------------------------- persistent rate limit */
   const statuses = await anon.evaluate(async () => {
