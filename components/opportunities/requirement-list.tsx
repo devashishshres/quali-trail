@@ -1,5 +1,5 @@
 import type { Requirement, RequirementResult } from "@/lib/types";
-import { ASSESSMENT_LABEL } from "@/lib/client/labels";
+import { ASSESSMENT_LABEL, PRIORITY_LABEL } from "@/lib/client/labels";
 import { AssessmentDisc } from "../ui/status";
 
 export function RequirementList({
@@ -36,9 +36,17 @@ export function RequirementList({
                 <span className="min-w-0">
                   {/* Original wording, never rewritten */}
                   <span className="block font-medium leading-snug">{r.originalText}</span>
+                  {r.displayText && (
+                    <span className="mt-1 block text-xs text-slate">
+                      Your wording (display only, not used for matching): {r.displayText}
+                    </span>
+                  )}
                   <span className="mt-1 flex flex-wrap gap-x-3 text-xs text-slate">
                     <span className="font-semibold">{result ? ASSESSMENT_LABEL[result.assessment] : "Not assessed yet"}</span>
-                    <span>{r.mandatory ? "Required" : "Optional"}</span>
+                    <span>
+                      {r.priority ? PRIORITY_LABEL[r.priority] : r.mandatory ? "Required" : "Optional"}
+                      {r.priority && r.originalPriority && r.priority !== r.originalPriority && ` (listing: ${PRIORITY_LABEL[r.originalPriority]})`}
+                    </span>
                     {result && <span>{result.connections.length} linked records</span>}
                   </span>
                 </span>

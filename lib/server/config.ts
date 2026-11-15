@@ -53,7 +53,7 @@ export function configProblems(env: NodeJS.ProcessEnv = process.env): ConfigProb
   else if (env.SIGNOFF_PEPPER.length < 32) out.push({ name: "SIGNOFF_PEPPER", problem: "must be at least 32 characters" });
 
   for (const n of Object.keys(env)) {
-    if (n.startsWith("NEXT_PUBLIC_") && /SECRET|PEPPER|RESEND|GEMINI|SUPERMEMORY|PASSWORD|API_KEY/.test(n)) {
+    if (n.startsWith("NEXT_PUBLIC_") && /SECRET|PEPPER|RESEND|GEMINI|SUPERMEMORY|TINYFISH|PASSWORD|API_KEY/.test(n)) {
       out.push({ name: n, problem: "looks like a secret but is exposed to browsers; use a server-only name" });
     }
   }

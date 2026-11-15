@@ -13,15 +13,18 @@ const ASSESSMENT_TONE: Record<EvidenceAssessment, { text: string; fill: string }
   evidence_found: { text: "text-teal-ink", fill: "var(--color-teal)" },
   needs_review: { text: "text-orange-ink", fill: "var(--color-orange)" },
   no_sufficient_evidence: { text: "text-slate", fill: "var(--color-slate)" },
+  cannot_assess: { text: "text-navy", fill: "var(--color-navy)" },
 };
 
 export function AssessmentDisc({ assessment, className = "size-3.5" }: { assessment: EvidenceAssessment; className?: string }) {
   const { fill } = ASSESSMENT_TONE[assessment];
   return (
     <svg viewBox="0 0 16 16" className={`${className} shrink-0`} aria-hidden="true">
-      <circle cx="8" cy="8" r="6.5" fill="none" stroke={fill} strokeWidth="2" />
+      <circle cx="8" cy="8" r="6.5" fill="none" stroke={fill} strokeWidth="2" strokeDasharray={assessment === "cannot_assess" ? "3 2" : undefined} />
       {assessment === "evidence_found" && <circle cx="8" cy="8" r="4" fill={fill} />}
       {assessment === "needs_review" && <path d="M8 4a4 4 0 0 1 0 8z" fill={fill} />}
+      {/* Not assessed: a dashed ring with a centre dash, so it can't be mistaken for "no evidence" (hollow). */}
+      {assessment === "cannot_assess" && <path d="M5 8h6" stroke={fill} strokeWidth="2" strokeLinecap="round" />}
     </svg>
   );
 }

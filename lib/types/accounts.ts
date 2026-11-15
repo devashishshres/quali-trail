@@ -40,7 +40,7 @@ export const MeResponse = z.object({
   /** A technician profile is possible only under the sign-up policy (never by invitation alone). */
   canOnboardWorker: z.boolean(),
   canOnboardSupervisor: z.boolean(),
-  features: z.object({ customerSignoff: z.boolean(), supervisorReview: z.boolean() }),
+  features: z.object({ customerSignoff: z.boolean(), supervisorReview: z.boolean(), jobImport: z.boolean().default(false) }),
 });
 export type MeResponse = z.infer<typeof MeResponse>;
 

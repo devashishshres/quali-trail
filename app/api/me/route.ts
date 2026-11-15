@@ -3,6 +3,7 @@ import { apiError, ok } from "@/lib/api/responses";
 import { supervisorReviewEnabled } from "@/lib/server/accounts/flags";
 import { allowedRoles } from "@/lib/server/accounts/roles";
 import { configProblems } from "@/lib/server/config";
+import { importConfigProblems, importEnabled } from "@/lib/server/imports/config";
 import { signoffEnabled } from "@/lib/server/signoff/config";
 import type { MeResponse } from "@/lib/types";
 
@@ -20,6 +21,6 @@ export async function GET() {
     canOnboard: may.worker || may.supervisor,
     canOnboardWorker: may.worker,
     canOnboardSupervisor: may.supervisor,
-    features: { customerSignoff: signoffEnabled(), supervisorReview: supervisorReviewEnabled() },
+    features: { customerSignoff: signoffEnabled(), supervisorReview: supervisorReviewEnabled(), jobImport: importEnabled() && importConfigProblems().length === 0 },
   });
 }

@@ -5,7 +5,11 @@ import type { MatchRunResponse, Opportunity } from "@/lib/types";
 import { api, toApiError } from "@/lib/client/api";
 import type { ApiRequestError } from "@/lib/client/errors";
 import { useLoad } from "@/lib/client/use-load";
-import { ASSESSMENT_LABEL, NO_EVIDENCE_NOTE, formatStamp } from "@/lib/client/labels";
+import { ASSESSMENT_LABEL, CANNOT_ASSESS_NOTE, NO_EVIDENCE_NOTE, formatDate, formatStamp } from "@/lib/client/labels";
+import { FIXTURE_MODE } from "@/lib/client/api";
+import { accountsApi } from "@/lib/client/accounts-api";
+import { FitSummary } from "@/components/opportunities/fit-summary";
+import { ImportCard } from "@/components/opportunities/import-card";
 import { Constellation } from "@/components/opportunities/constellation";
 import { RequirementList } from "@/components/opportunities/requirement-list";
 import { ErrorNotice, Loading, Notice, PageHeader } from "@/components/ui/states";
@@ -14,7 +18,9 @@ import { Icon } from "@/components/ui/icons";
 
 export default function OpportunitiesPage() {
   const opps = useLoad(api.listOpportunities);
-  const [oppId, setOppId] = useState<string | null>(null);
+  const me = useLoad(() => (FIXTURE_MODE ? Promise.resolve(null) : accountsApi.me()));
+  // Arriving from a confirmed import: open that job.
+  const [oppId, setOppId] = useState<string | null>(() => (typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("job")));
   const list = opps.data?.opportunities ?? [];
   const opportunity = list.find((o) => o.id === oppId) ?? list[0];
 
@@ -34,6 +40,7 @@ export default function OpportunitiesPage() {
           </label>
         )}
       </PageHeader>
+      {me.data?.features.jobImport && <ImportCard />}
       {opps.status === "loading" && <Loading label="Loading opportunities…" />}
       {opps.error && <ErrorNotice error={opps.error} onRetry={opps.reload} />}
       {opps.data && !opportunity && <p className="text-slate">No opportunities yet.</p>}
@@ -75,7 +82,9 @@ function Matcher({ opportunity }: { opportunity: Opportunity }) {
             {opportunity.isSynthetic && <FictionalTag />}
           </div>
           <p className="font-medium text-slate">{opportunity.employer}</p>
+          {opportunity.importInfo?.location && <p className="text-sm text-slate">{opportunity.importInfo.location}</p>}
           <p className="mt-3">{opportunity.description}</p>
+          {opportunity.importInfo && <ImportProvenance opportunity={opportunity} />}
           <p className="mt-2 text-sm text-slate">
             Source:{" "}
             {opportunity.sourceUrl ? (
@@ -136,6 +145,12 @@ function Matcher({ opportunity }: { opportunity: Opportunity }) {
         )}
       </div>
 
+      {run && opportunity.importInfo && (
+        <div className="mt-6">
+          <FitSummary opportunity={opportunity} run={run} onSelect={setReqId} />
+        </div>
+      )}
+
       <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,22rem)_1fr]">
         <div>
           <h3 className="mb-3 font-display text-xl font-semibold">Requirements</h3>
@@ -154,7 +169,8 @@ function Matcher({ opportunity }: { opportunity: Opportunity }) {
           ) : selectedResult && run ? (
             <>
               <Constellation result={selectedResult} runId={run.id} />
-              {selectedResult.assessment !== "evidence_found" && (
+              {selectedResult.assessment === "cannot_assess" && <p className="mt-4 text-sm">{CANNOT_ASSESS_NOTE}</p>}
+              {(selectedResult.assessment === "needs_review" || selectedResult.assessment === "no_sufficient_evidence") && (
                 <p className="mt-4 text-sm">
                   Have a record that covers this?{" "}
                   <Link href="/evidence" className="font-semibold underline underline-offset-2">
@@ -176,5 +192,35 @@ function Matcher({ opportunity }: { opportunity: Opportunity }) {
         </div>
       </div>
     </>
+  );
+}
+
+/** Where this job's wording came from, and what the technician acknowledged or changed when confirming it. */
+function ImportProvenance({ opportunity }: { opportunity: Opportunity }) {
+  const info = opportunity.importInfo!;
+  return (
+    <div className="mt-3 space-y-1 text-sm text-slate">
+      <p>
+        {info.sourceKind === "listing_url"
+          ? `Requirements quoted from the public listing, retrieved ${info.retrievedAt ? formatDate(info.retrievedAt.slice(0, 10)) : "on an unknown date"}. The listing may have changed since.`
+          : "Requirements quoted from listing text you supplied (not retrieved from the employer)."}
+      </p>
+      {(info.removedCount > 0 || info.editedCount > 0) && (
+        <p>
+          {info.removedCount > 0 && `You removed ${info.removedCount} line${info.removedCount > 1 ? "s" : ""} before confirming. `}
+          {info.editedCount > 0 && `You reworded ${info.editedCount} line${info.editedCount > 1 ? "s" : ""} for display; matching uses the employer's wording.`}
+        </p>
+      )}
+      {info.warnings.length > 0 && (
+        <details>
+          <summary className="cursor-pointer font-semibold text-orange-ink">Warnings you acknowledged ({info.warnings.length})</summary>
+          <ul className="mt-1 list-disc pl-5">
+            {info.warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
   );
 }

@@ -32,6 +32,11 @@ export const EvidenceAssessment = z.enum([
   "evidence_found",
   "needs_review",
   "no_sufficient_evidence",
+  /**
+   * QualiTrail cannot judge this requirement from records automatically (for example a driving licence,
+   * work authorization, a duration, or wording outside its supported rules). Says nothing about the person.
+   */
+  "cannot_assess",
 ]);
 export type EvidenceAssessment = z.infer<typeof EvidenceAssessment>;
 
@@ -211,8 +216,61 @@ export const RequirementCriteria = z.object({
   retrievalQuery: ShortText,
   /** Fields a directly-satisfying record must have filled in. */
   requiredFields: z.array(z.enum(["date", "issuer"])).default([]),
+  /**
+   * Imported jobs only. Absent on seeded and sample requirements, which therefore evaluate exactly as before.
+   * Built deterministically from the employer's ORIGINAL wording (never from model output or display edits).
+   */
+  rule: z.lazy(() => RequirementRule).optional(),
 });
 export type RequirementCriteria = z.infer<typeof RequirementCriteria>;
+
+/** One condition of a supported rule. Every condition must be met (all-of). */
+export const RuleCondition = z.object({
+  /** Catalog entry id, e.g. "epa608_type2". */
+  id: z.string().min(1).max(60),
+  /** Plain-language name of the condition, shown in explanations. */
+  label: ShortText,
+  acceptedTypes: z.array(EvidenceType).min(1),
+  supportingTypes: z.array(EvidenceType).default([]),
+  keywords: z.array(ShortText).min(1),
+  /**
+   * Scope terms the record must state. Each inner list is one group; every group needs at least one term present
+   * in the record's title, skills or activities. A record missing a group is "incomplete", never a direct match.
+   */
+  termGroups: z.array(z.array(ShortText).min(1)).default([]),
+  requiredFields: z.array(z.enum(["date", "issuer"])).default([]),
+  retrievalQuery: ShortText,
+});
+export type RuleCondition = z.infer<typeof RuleCondition>;
+
+export const ReviewReason = z.enum([
+  "unsupported_wording", // no catalog rule fully covers the wording
+  "alternatives", // "or", "/", "equivalent": QualiTrail does not pick between alternatives
+  "negation",
+  "duration", // years / months of experience
+  "driving", // licence, driving record, vehicle
+  "work_authorization",
+  "physical",
+  "background_check",
+  "education",
+  "schedule",
+  "marked_by_technician", // the technician chose "mark for manual review"
+]);
+export type ReviewReason = z.infer<typeof ReviewReason>;
+
+export const RequirementRule = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("supported"), conditions: z.array(RuleCondition).min(1).max(4) }),
+  z.object({
+    kind: z.literal("review_only"),
+    reasons: z.array(ReviewReason).min(1),
+    /** Conditions recognised in part of the wording; used ONLY to show related records, never to decide. */
+    partial: z.array(RuleCondition).max(4).default([]),
+  }),
+]);
+export type RequirementRule = z.infer<typeof RequirementRule>;
+
+export const RequirementPriority = z.enum(["required", "preferred", "unspecified"]);
+export type RequirementPriority = z.infer<typeof RequirementPriority>;
 
 export const Requirement = z.object({
   id: Id,
@@ -224,6 +282,12 @@ export const Requirement = z.object({
   criteria: RequirementCriteria,
   /** Where the wording came from, e.g. "Demo job posting (fictional)". */
   source: ShortText,
+  /** Imported jobs: priority as used now, and as the posting stated it. Seeded rows: null. */
+  priority: RequirementPriority.nullable().optional(),
+  originalPriority: RequirementPriority.nullable().optional(),
+  /** Technician's cosmetic rewording for display. Never used for matching; null when unchanged. */
+  displayText: z.string().max(1000).nullable().optional(),
+  category: z.string().max(60).nullable().optional(),
 });
 export type Requirement = z.infer<typeof Requirement>;
 
@@ -235,6 +299,24 @@ export const Opportunity = z.object({
   sourceUrl: z.url().nullable(),
   isSynthetic: z.boolean(),
   requirements: z.array(Requirement),
+  /** Imported jobs only (null otherwise). */
+  importInfo: z
+    .object({
+      importId: Id,
+      /** "listing_url" = retrieved from the public posting; "pasted_text" = supplied by the technician. */
+      sourceKind: z.enum(["listing_url", "pasted_text"]),
+      location: z.string().max(300).nullable(),
+      retrievedAt: IsoDateTime.nullable(),
+      finalUrl: z.string().max(2048).nullable(),
+      /** Completeness warnings the technician acknowledged when confirming. */
+      warnings: z.array(z.string().max(500)),
+      /** Requirement lines the technician removed before confirming (count only). */
+      removedCount: z.number().int().nonnegative(),
+      /** Lines whose display wording the technician edited (cosmetic). */
+      editedCount: z.number().int().nonnegative(),
+    })
+    .nullable()
+    .optional(),
 });
 export type Opportunity = z.infer<typeof Opportunity>;
 

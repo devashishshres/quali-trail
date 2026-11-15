@@ -8,7 +8,8 @@ import { call } from "@/lib/client/signoff-api";
 import { attestationTags } from "@/lib/client/attestation-labels";
 import { api } from "@/lib/client/api";
 import { useLoad } from "@/lib/client/use-load";
-import { NO_EVIDENCE_NOTE, TYPE_LABEL, formatDate, formatStamp } from "@/lib/client/labels";
+import { CANNOT_ASSESS_NOTE, NO_EVIDENCE_NOTE, PRIORITY_LABEL, TYPE_LABEL, formatDate, formatStamp } from "@/lib/client/labels";
+import { FitSummary } from "@/components/opportunities/fit-summary";
 import { ErrorNotice, Loading, Notice, PageHeader } from "@/components/ui/states";
 import { AssessmentLabel, FictionalTag, SignoffTag, VerificationTag } from "@/components/ui/status";
 import { Icon } from "@/components/ui/icons";
@@ -93,8 +94,10 @@ function Packet({ worker, evidence, opportunity }: { worker: Worker; evidence: E
   const current = run.status === "completed";
   const counts = run.results.reduce(
     (acc, r) => ({ ...acc, [r.assessment]: acc[r.assessment] + 1 }),
-    { evidence_found: 0, needs_review: 0, no_sufficient_evidence: 0 } as Record<EvidenceAssessment, number>,
+    { evidence_found: 0, needs_review: 0, no_sufficient_evidence: 0, cannot_assess: 0 } as Record<EvidenceAssessment, number>,
   );
+  const reqById = new Map(opportunity.requirements.map((r) => [r.id, r]));
+  const info = opportunity.importInfo ?? null;
   const sources = [...new Map(run.results.flatMap((r) => r.connections).map((c) => [c.evidenceId, c])).values()];
 
   return (
@@ -171,7 +174,20 @@ function Packet({ worker, evidence, opportunity }: { worker: Worker; evidence: E
             <h3 className="text-sm font-semibold text-slate">Opportunity</h3>
             <p className="font-display text-2xl font-semibold">{opportunity.title}</p>
             <p>{opportunity.employer}</p>
+            {info?.location && <p className="text-sm">{info.location}</p>}
             <p className="text-sm text-slate">Source: {opportunity.sourceUrl ?? opportunity.requirements[0]?.source ?? "Not stated"}</p>
+            {info && (
+              <div className="mt-1 space-y-1 text-xs text-slate">
+                <p>
+                  {info.sourceKind === "listing_url"
+                    ? `Requirements quoted word-for-word from the public listing as retrieved ${info.retrievedAt ? formatStamp(info.retrievedAt) : ""}${info.finalUrl && info.finalUrl !== opportunity.sourceUrl ? ` (final page ${info.finalUrl})` : ""}. The listing may have changed since.`
+                    : "Requirements quoted from listing text the technician supplied; not retrieved from the employer."}
+                </p>
+                {info.removedCount > 0 && <p>The technician removed {info.removedCount} listing line{info.removedCount > 1 ? "s" : ""} before comparing; they are not in this report.</p>}
+                {info.editedCount > 0 && <p>{info.editedCount} line{info.editedCount > 1 ? "s were" : " was"} reworded by the technician for display; the employer&apos;s wording is shown and was used.</p>}
+                {info.warnings.length > 0 && <p>Import warnings acknowledged by the technician: {info.warnings.join(" ")}</p>}
+              </div>
+            )}
           </section>
         </div>
 
@@ -185,6 +201,12 @@ function Packet({ worker, evidence, opportunity }: { worker: Worker; evidence: E
         </p>
 
         {run.memoryWarning && <p className="mt-3 text-sm text-orange-ink">Note: {run.memoryWarning}</p>}
+        {counts.cannot_assess > 0 && <p className="mt-3 text-sm text-slate">&ldquo;Can&apos;t assess automatically&rdquo;: {CANNOT_ASSESS_NOTE}</p>}
+        {info && (
+          <div className="mt-6">
+            <FitSummary opportunity={opportunity} run={run} print />
+          </div>
+        )}
 
         <section className="mt-8">
           <h3 className="font-display text-2xl font-semibold">Requirement by requirement</h3>
@@ -214,7 +236,21 @@ function Packet({ worker, evidence, opportunity }: { worker: Worker; evidence: E
                             <>
                               <td rowSpan={rows.length} className="py-3 pr-4 font-medium">
                                 {r.originalText}
-                                {!r.mandatory && <span className="block text-xs text-slate">Optional</span>}
+                                {(() => {
+                                  const q = reqById.get(r.requirementId);
+                                  if (q?.priority) {
+                                    return (
+                                      <span className="block text-xs font-normal text-slate">
+                                        {PRIORITY_LABEL[q.priority]}
+                                        {q.originalPriority && q.originalPriority !== q.priority && ` (listing stated: ${PRIORITY_LABEL[q.originalPriority]}; changed by the technician)`}
+                                      </span>
+                                    );
+                                  }
+                                  return !r.mandatory && <span className="block text-xs text-slate">Optional</span>;
+                                })()}
+                                {reqById.get(r.requirementId)?.displayText && (
+                                  <span className="block text-xs font-normal text-slate">Technician&apos;s wording (display only): {reqById.get(r.requirementId)!.displayText}</span>
+                                )}
                               </td>
                               <td rowSpan={rows.length} className="py-3 pr-4">
                                 <AssessmentLabel assessment={r.assessment} />

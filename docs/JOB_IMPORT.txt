@@ -1,0 +1,98 @@
+# Job import (feature-flagged, off by default)
+
+A technician pastes a public job-listing link (or the listing text). QualiTrail retrieves that one page, drafts the
+requirement lines, lets the technician review them, then compares them with the technician's own saved records
+and shows a fit summary and report.
+
+## What leaves QualiTrail
+
+- **TinyFish Fetch** receives the listing URL only (`urls`, `format`, `per_url_timeout_ms`). Never the technician's
+  name, profile, evidence, documents or account. No forms, sign-ins or applications.
+- **Gemini** receives the listing text only.
+- Pasted text never goes to TinyFish.
+
+## Flow and states
+
+`opportunity_imports` (server-only table; no browser privileges):
+`fetching → fetched → drafting → drafted → confirmed`, or `failed` / `expired`.
+
+| Step | Guard |
+|---|---|
+| URL check | http(s) only, no credentials, ports 80/443, not localhost/internal names, and every A/AAAA record public (IPv4 and IPv6, including mapped/NAT64/6to4/Teredo). Refused before any row or provider call. |
+| Begin | Unique `(worker, url)` while fetching (duplicate submit → "already being retrieved"); daily limit on provider retrievals (`IMPORT_DAILY_LIMIT`); a fetch stuck > 3 min is marked failed. |
+| Fetch | Our own 45 s deadline (`AbortSignal.timeout`); per-URL timeout sent to TinyFish 3 s shorter. |
+| Final URL | The returned `final_url` must also pass the URL check, or the result is discarded. |
+| Lease | `opportunity_import_lease`: exactly one drafter; lapses after 2 min; never from `drafted`/`confirmed`, so a draft is never regenerated or overwritten. |
+| Draft | Gemini within the remaining budget (each attempt ≤ 15 s, none started without time to finish). Lines kept only if found word-for-word in the listing. |
+| Review | Optimistic version check on every save. |
+| Confirm | `opportunity_import_confirm`: locks the draft, checks owner/status/expiry/version, inserts the job and its requirements in one transaction, clears the stored listing text. A repeat returns the same job. Unique index on `opportunities.import_id`. |
+
+Overall request budget: 100 s, enforced in code. Vercel's default function limit is 300 s on every plan
+(vercel.com/docs/functions/limitations); `maxDuration = 120` is set only so the platform never cuts in first.
+TinyFish documents a 110 s per-URL backend timeout and a 120 s batch ceiling; we never wait that long.
+
+### Redirect / SSRF boundary
+
+QualiTrail's server never requests the listing URL itself. TinyFish documents that it rejects private IPs,
+localhost and cloud-metadata endpoints for submitted URLs (`invalid_url`) and for redirect targets
+(`invalid_redirect_url`). Our checks are an extra first line (before sending) and last line (discarding a result
+whose final URL is not public). Checking `final_url` can only reject a result; it cannot undo a redirect that already
+happened at the provider. DNS can change between our check and TinyFish's fetch; TinyFish's own checks cover that.
+
+## How lines are assessed
+
+Gemini only proposes verbatim lines. `lib/server/opportunities/requirement-rules.ts` builds rules
+deterministically from the employer's **original** wording:
+
+- Supported catalog: EPA 608 (unscoped, Universal, Type I/II/III; "Type II or Universal" is the one resolved
+  alternative because Universal covers Type II), NATE, OSHA 10/30, heat-pump installation / startup / commissioning
+  work (with "residential" required to be stated), commissioning, brazing.
+- Every content word must be covered by a catalog phrase or harmless filler. Leftover words, numbers, negation,
+  alternatives (`or`, `/`, `equivalent`), durations, driving, work authorization, physical, background check,
+  education and schedule wording → **Can't assess automatically** (`cannot_assess`).
+- Two phrases become an all-of rule only when joined by an explicit conjunction (`and`, a comma, `as well as`);
+  `with`/`in`/`for` never split a line. Each part is evaluated separately and the line takes the weakest result.
+- Scope terms must be stated in the record (negated sentences ignored); a record missing one is "needs review",
+  never "evidence found".
+- Seeded and sample requirements have no rule and evaluate exactly as before.
+
+`cannot_assess` is stored in `requirement_results` (constraint widened), accepted by `finalize_match_run`, and shown
+in labels, the constellation, counts, changes, the fit summary and the report, with the note that it says nothing
+about whether the person meets the requirement. It never adds "missing documentation".
+
+## Review edits
+
+- The employer's wording, excerpt and original priority never change.
+- "Your wording" is display-only, labelled wherever shown; rules ignore it.
+- Priority can be changed; the report shows the listing's priority next to it.
+- "Mark for manual review" forces `cannot_assess`. Removed lines are counted and disclosed on the job and report.
+- Completeness warnings (cut-off text, lines not found verbatim, model said incomplete, > 40 lines, no lines found,
+  pasted text, different final website) are stored, shown prominently, and must be acknowledged to confirm.
+
+## Configuration
+
+See `.env.example`: `OPPORTUNITY_IMPORT_ENABLED`, `TINYFISH_API_KEY` (server-only), `TINYFISH_MODE`,
+`IMPORT_DAILY_LIMIT`. `GEMINI_API_KEY` is also required. Problems answer 503 "not available" and are logged by name only.
+
+## Migration and rollback
+
+`supabase/migrations/20261118100000_job_import.sql` is additive. The app reads opportunities and requirements with
+`select *`, so it works before or after the migration. Rollback while unused:
+`scripts/sql/rollback-job-import-if-empty.sql` (refuses if any import, imported job, import field or `cannot_assess`
+result exists). `opportunity_import_expire()` clears expired drafts; no schedule is installed.
+
+## Checks
+
+- Unit: `tests/opportunities/requirement-rules.test.ts`, `tests/matching/evaluate-rules.test.ts`,
+  `tests/imports/*.test.ts` (URL/DNS, TinyFish client, verbatim check, orchestration).
+- Database (disposable Postgres): `tests/db/job-import.test.ts` (concurrent lease and confirm, expiry, ownership,
+  browser-role denial, `cannot_assess` through `finalize_match_run`, rollback).
+- Browser (isolated local stack, stub): `scripts/e2e-import.mts`.
+
+## Limitations
+
+- Not tested against live TinyFish or live Gemini drafting yet.
+- Listings behind sign-in, bot protection or in images/attachments need the paste fallback.
+- The catalog is deliberately small; most real postings will have several "Can't assess automatically" lines.
+- The stored listing is a snapshot; listing refresh/supersede (`supersedes_id`) is not implemented yet.
+- No scheduled purge of expired drafts.
