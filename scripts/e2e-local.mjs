@@ -1,7 +1,7 @@
 // Real browser journeys against the ISOLATED LOCAL stack (app on :3100, Supabase on :54321, Mailpit on :54324).
 // All identities are fictional (@test.qualitrail.dev / @example.test). Nothing here touches a hosted service.
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 //
 // Usage (see README, "Local browser journeys"): start the local stack, build and start the app on :3100 with
 // the local-only environment, then:
@@ -357,6 +357,75 @@ try {
   const conflict = await SV.evaluate(async (rid) => (await fetch(`/api/supervisor/reviews/${rid}/respond`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision: "decline" }) })).status, rid);
   check("conflicting retry is refused", conflict === 403, `status ${conflict}`);
 
+  /* ---------------------------------------------------------------- supervisor review of a record with a PDF */
+  // Upload needs Gemini (deliberately unavailable locally), so the two PDF records are written straight into the
+  // LOCAL database and storage, labelled as fixtures. Everything after that goes through the real UI and API.
+  const wAuth = (await admin.from("workers").select("auth_user_id").eq("id", wrow.id).single()).data.auth_user_id;
+  async function pdfRecord(title) {
+    const bytes = Buffer.from(`%PDF-1.4\n% LOCAL TEST FIXTURE: ${title}\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n`);
+    const path = `${wAuth}/fixture-${randomUUID()}.pdf`;
+    const up = await admin.storage.from("evidence").upload(path, bytes, { contentType: "application/pdf" });
+    if (up.error) throw new Error(`fixture upload failed: ${up.error.message}`);
+    const { data, error } = await admin.from("evidence").insert({
+      worker_id: wrow.id, type: "work_record", title, source_kind: "pdf_upload", storage_path: path, file_hash: createHash("sha256").update(bytes).digest("hex"),
+      verification_status: "document_supplied", is_synthetic: true, structured_data: { activities: ["Replaced compressor contactor"], equipment: ["Rooftop unit"], summary: "LOCAL TEST FIXTURE" },
+    }).select("id").single();
+    if (error) throw new Error(`fixture insert failed: ${error.code}`);
+    return data.id;
+  }
+  const inRecord = (title, fn, arg) => W.evaluate((title, fnSrc, arg) => {
+    const d = [...document.querySelectorAll("details")].find((x) => x.querySelector("summary")?.innerText.includes(title));
+    return new Function("d", "arg", fnSrc)(d, arg);
+  }, title, fn, arg);
+  const reqFor = async (eid) => (await admin.from("review_requests").select("id, has_original").eq("evidence_id", eid).single()).data;
+  const svApi = (p, rid, path, body) => p.evaluate(async (rid, path, body) => {
+    const r = await fetch(`/api/supervisor/reviews/${rid}${path}`, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : undefined);
+    return { status: r.status, body: await r.json().catch(() => null) };
+  }, rid, path, body);
+
+  const pdfA = `Rooftop unit A ${run} (LOCAL TEST FIXTURE)`;
+  const eidA = await pdfRecord(pdfA);
+  await openRecord(pdfA);
+  await W.waitForFunction((t) => [...document.querySelectorAll("details")].some((d) => d.querySelector("summary")?.innerText.includes(t) && d.querySelector("[data-testid=review-sharing]")), {}, pdfA);
+  const defaults = await inRecord(pdfA, 'const box = d.querySelector("input[name=shareOriginal]"); return { exists: !!box, checked: box?.checked, text: d.querySelector("[data-testid=review-sharing]").innerText };');
+  check("PDF record: sharing the original is offered but OFF by default", defaults.exists && defaults.checked === false && defaults.text.includes("will not be shared"), JSON.stringify(defaults.checked));
+  await inRecord(pdfA, '[...d.querySelectorAll("button")].find((b) => b.textContent.trim() === "Ask for review").click();');
+  await W.waitForFunction((t) => [...document.querySelectorAll("details")].some((d) => d.querySelector("summary")?.innerText.includes(t) && d.innerText.includes("Awaiting supervisor")), {}, pdfA);
+  const reqA = await waitFor(() => reqFor(eidA));
+  check("sent with the default: the request does not include the PDF", reqA.has_original === false);
+  const aGet = await svApi(SV, reqA.id, "");
+  const aDoc = await svApi(SV, reqA.id, "/document");
+  const aDecide = await svApi(SV, reqA.id, "/respond", { decision: "confirm_documents_reviewed", agreed: true });
+  check("not shared: the supervisor sees the record but cannot open the PDF or claim a document review", aGet.status === 200 && aGet.body.hasOriginal === false && aDoc.status === 404 && aDecide.status === 403, `${aGet.status},${aDoc.status},${aDecide.status}`);
+  await SV.goto(`${APP}/supervisor/reviews/${reqA.id}`, { waitUntil: "networkidle0" });
+  await SV.waitForFunction((t) => document.body.innerText.includes(t), {}, pdfA);
+  const aPage = await text(SV);
+  check("not shared: the review page offers no document button or document-review option", !aPage.includes("View supporting document") && !aPage.includes("I reviewed the supporting document") && aPage.includes("didn't share a supporting document"));
+
+  const pdfB = `Rooftop unit B ${run} (LOCAL TEST FIXTURE)`;
+  const eidB = await pdfRecord(pdfB);
+  await openRecord(pdfB);
+  await W.waitForFunction((t) => [...document.querySelectorAll("details")].some((d) => d.querySelector("summary")?.innerText.includes(t) && d.querySelector("[data-testid=review-sharing]")), {}, pdfB);
+  await inRecord(pdfB, 'd.querySelector("input[name=shareOriginal]").click();');
+  await sleep(300);
+  const warned = await inRecord(pdfB, 'return d.querySelector("[data-testid=review-sharing]").innerText;');
+  check("opting in shows the customer-information warning before sending", warned.includes("may contain customer names, addresses"));
+  await shot(W, "05b-share-pdf-opt-in");
+  await inRecord(pdfB, '[...d.querySelectorAll("button")].find((b) => b.textContent.trim() === "Ask for review").click();');
+  await W.waitForFunction((t) => [...document.querySelectorAll("details")].some((d) => d.querySelector("summary")?.innerText.includes(t) && d.innerText.includes("Awaiting supervisor")), {}, pdfB);
+  const reqB = await waitFor(() => reqFor(eidB));
+  check("explicit opt-in: the request includes the PDF", reqB.has_original === true);
+  const bDoc = await svApi(SV, reqB.id, "/document");
+  const fetched = bDoc.status === 200 ? await fetch(bDoc.body.url) : null;
+  const pdfBytes = fetched ? Buffer.from(await fetched.arrayBuffer()).toString("latin1") : "";
+  check("the addressed supervisor can open the shared PDF (short-lived link)", bDoc.status === 200 && fetched?.status === 200 && pdfBytes.startsWith("%PDF") && pdfBytes.includes(pdfB), `${bDoc.status},${fetched?.status}`);
+  await SV.goto(`${APP}/supervisor/reviews/${reqB.id}`, { waitUntil: "networkidle0" });
+  await SV.waitForFunction((t) => document.body.innerText.includes(t), {}, pdfB);
+  check("shared: the review page offers the document and the document-review option", (await text(SV)).includes("View supporting document") && (await text(SV)).includes("I reviewed the supporting document"));
+  const xDoc = await svApi(X, reqB.id, "/document");
+  const anonDoc = await anon.evaluate(async (rid) => (await fetch(`/api/supervisor/reviews/${rid}/document`)).status, reqB.id);
+  check("another supervisor and a signed-out visitor cannot open the shared PDF", xDoc.status === 404 && anonDoc === 401, `${xDoc.status},${anonDoc}`);
+
   await W.goto(`${APP}/evidence`, { waitUntil: "networkidle0" });
   await W.waitForFunction(() => document.body.innerText.includes("Supervisor confirmed observing these tasks"));
   const ev = (await admin.from("evidence").select("id, verification_status, version").eq("worker_id", wrow.id).eq("title", jobTitle).single()).data;
@@ -390,7 +459,8 @@ try {
   await W.waitForSelector("section[aria-label='Supervisor review'] select[name=relationship]");
   await clickText(W, "Ask for review");
   await W.waitForFunction(() => document.body.innerText.includes("Awaiting supervisor"));
-  const pendingRid = (await admin.from("review_requests").select("id").eq("worker_id", wrow.id).eq("status", "pending").single()).data.id;
+  const job2Id = (await admin.from("evidence").select("id").eq("worker_id", wrow.id).eq("title", job2).single()).data.id;
+  const pendingRid = (await admin.from("review_requests").select("id").eq("evidence_id", job2Id).eq("status", "pending").single()).data.id;
   await SV.goto(`${APP}/supervisor`, { waitUntil: "networkidle0" });
   check("pending item appears in the supervisor dashboard", (await text(SV)).includes(job2));
   SV.on("dialog", (d) => d.accept());
@@ -403,6 +473,9 @@ try {
   check("after revocation the supervisor can neither read nor answer", blocked[0] === 404 && (blocked[1] === 404 || blocked[1] === 403) && lateAnswers === 0, blocked.join(","));
   const { count: keptReviews } = await admin.from("review_responses").select("id", { count: "exact", head: true }).eq("request_id", rid);
   check("completed review kept after revocation", keptReviews === 1);
+  const revokedDoc = await svApi(SV, reqB.id, "/document");
+  const revokedStatus = (await admin.from("review_requests").select("status").eq("id", reqB.id).single()).data.status;
+  check("after revocation the supervisor can no longer open the shared PDF", revokedDoc.status === 404 && revokedStatus === "revoked", `${revokedDoc.status},${revokedStatus}`);
 
   /* ---------------------------------------------------------------- dual role */
   await W.goto(`${APP}/supervisor`, { waitUntil: "networkidle0" });

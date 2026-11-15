@@ -67,8 +67,8 @@ try {
     await anon.goto(`${APP}${path}`, { waitUntil: "networkidle0" });
     check(`${path} renders signed out`, anon.url().endsWith(path));
   }
-  const signup = await anon.evaluate(async () => { const r = await fetch("/api/auth/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "nobody@not-allowed.example", password: "x".repeat(12) }) }); return r.status; });
-  check("sign-up without the migrations fails closed (rate limiter table absent)", signup === 429 || signup === 503, `status ${signup}`);
+  const signup = await anon.evaluate(async () => { const r = await fetch("/api/auth/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "nobody@not-allowed.example", password: "x".repeat(12) }) }); const j = await r.json().catch(() => ({})); return { status: r.status, code: j.error?.code, message: j.error?.message ?? "" }; });
+  check("sign-up without the migrations is refused as 'setup incomplete' (503), not 'too many attempts'", signup.status === 503 && signup.code === "unavailable" && !/too many/i.test(signup.message), JSON.stringify(signup));
 } catch (e) {
   check("aborted", false, e.message);
 } finally {
