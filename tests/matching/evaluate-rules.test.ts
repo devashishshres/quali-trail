@@ -132,3 +132,58 @@ describe("cannot_assess", () => {
     expect(run(imported("EPA 608 Universal certification", true), [c(universal)]).assessment).toBe("cannot_assess");
   });
 });
+
+/*
+ * Regression for the install-and-startup discrepancy seen while writing these tests. The evaluator never
+ * returned evidence_found for install-only evidence. One test expectation was wrong: it expected
+ * no_sufficient_evidence, but a work record of the right type that lacks startup is "needs_review" (a person
+ * should check). The other assertion used two document-supplied records, so evidence_found was correct there.
+ * This pins the rule: install-only evidence can NEVER produce evidence_found for an install-AND-startup line.
+ */
+describe("regression: install-only evidence vs an installation-and-startup requirement", () => {
+  const wordings = [
+    "Experience installing and starting up heat pumps",
+    "Documented hands-on experience installing and starting up residential heat-pump systems.",
+    "Heat pump installation and startup experience",
+    "Hands-on experience with heat pump installation and start-up",
+  ];
+  const installOnly = (status: Evidence["verificationStatus"]) =>
+    ev({
+      type: "work_record",
+      verificationStatus: status,
+      title: "Residential heat pump installation",
+      data: { activities: ["Installed residential heat pump", "Mounted outdoor unit", "Brazed line set"], summary: "Installation completed; startup was done by another crew." },
+    });
+
+  it.each(wordings)("%s", (text) => {
+    const r = analyzeRequirement(text).rule;
+    expect(r.kind === "supported" && r.conditions.map((c) => c.id)).toEqual(expect.arrayContaining(["hp_install", "hp_startup"]));
+    for (const status of ["self_reported", "document_supplied", "pending_review", "independently_confirmed"] as const) {
+      for (const sim of [null, 0.99]) {
+        const out = run(imported(text), [c(installOnly(status), sim)]);
+        expect(out.assessment, `${status} / similarity ${sim}`).not.toBe("evidence_found");
+        expect(out.missingDocumentation.join(" ")).toMatch(/start up/i);
+      }
+    }
+  });
+
+  it("the same record plus a separate startup record does reach evidence_found when both are documented", () => {
+    const startupDoc = ev({ type: "work_record", verificationStatus: "document_supplied", title: "Residential heat pump startup", data: { activities: ["Started up residential heat pump", "Ran operational test"] } });
+    expect(run(imported(wordings[1]), [c(installOnly("document_supplied")), c(startupDoc)]).assessment).toBe("evidence_found");
+  });
+
+  it("the seeded requirement (no rule, legacy path) also refuses install-only evidence", () => {
+    const seeded: Requirement = {
+      id: "c0000000-0000-4000-8000-000000000003",
+      opportunityId: "b0000000-0000-4000-8000-000000000001",
+      position: 2,
+      originalText: "Documented hands-on experience installing and starting up residential heat-pump systems.",
+      mandatory: true,
+      criteria: { acceptedTypes: ["work_record", "checklist"], supportingTypes: ["training"], keywords: ["startup", "start-up", "install", "operational test"], retrievalQuery: "q", requiredFields: ["date"] },
+      source: "Demo",
+    };
+    const out = run(seeded, [c(installOnly("independently_confirmed"))]);
+    expect(out.assessment).not.toBe("evidence_found");
+    expect(out.missingDocumentation.join(" ")).toMatch(/startup work performed/);
+  });
+});

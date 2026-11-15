@@ -44,18 +44,57 @@ function lineKey(s: string) {
   return canon(s).replace(/[.;:,]+$/, "").trim();
 }
 
-const PREFERRED_HEADING = /\b(?:preferred|nice to have|bonus|desired|pluses|a plus|ideal|desirable|optional)\b/;
-const REQUIRED_HEADING = /\b(?:requirements?|required|qualifications?|must haves?|minimum|basic|essential|what you need|what you'll need|what we need)\b/;
-const OTHER_HEADING = /\b(?:benefits?|perks|about|responsibilit(?:y|ies)|duties|what you'll do|compensation|pay|salary|schedule|how to apply|equal opportunity)\b/;
+/*
+ * Priority is read only from what the listing states. When it can't be established, it stays "unspecified":
+ *  - A heading counts as REQUIRED only with explicit words (requirements, required, must, minimum, basic,
+ *    essential, "what you'll need"). A bare "Qualifications" or "Skills" heading does not say required.
+ *  - A heading or line that says both required and preferred things is ambiguous -> unspecified.
+ *  - "not required" / "not necessary" never counts as required.
+ */
+const PREFERRED_WORDS = /\b(?:preferred|preferably|nice to haves?|bonus|desired|desirable|pluses|a plus|is a plus|ideally|ideal|optional|advantageous|helpful)\b/;
+const REQUIRED_WORDS = /\b(?:requirements?|required|must|mandatory|minimum|basic|essential|what you'll need|what you need|what we need)\b/;
+const NEGATED_REQUIRED = /\b(?:not|no|never)\b[^.;]{0,30}\b(?:required|necessary|mandatory|needed)\b/;
+const OTHER_HEADING = /\b(?:benefits?|perks|about|responsibilit(?:y|ies)|duties|what you'll do|what we offer|compensation|pay|salary|how to apply|equal opportunity)\b/;
 
-function isHeading(raw: string): string | null {
+/** Plain-text headings are recognised only from this list, so a short requirement line is never mistaken for one. */
+const KNOWN_HEADING = new RegExp(
+  "^(?:(?:minimum|basic|required|preferred|desired|additional|key|job|essential|other)\\s+)?" +
+    "(?:requirements|qualifications|skills|skills and qualifications|qualifications and skills|requirements and qualifications|" +
+    "required and preferred qualifications|nice to haves?|bonus(?: points)?|pluses|benefits|perks|responsibilities|duties|" +
+    "about (?:the|this) (?:role|job|position|company)|about us|what you'll need|what you need|what we need|what you'll do|" +
+    "what we offer|what we're looking for|who you are|compensation|pay|schedule|how to apply|education|certifications?|licenses?)$",
+);
+
+export function isHeading(raw: string): string | null {
   const t = raw.trim();
   const md = t.match(/^#{1,6}\s+(.+)$/);
   if (md) return md[1];
   const bold = t.match(/^\*\*([^*]{2,80})\*\*:?$/);
   if (bold) return bold[1];
   if (/^[A-Za-z][A-Za-z '’&/-]{1,60}:$/.test(t)) return t.slice(0, -1);
+  if (t.length <= 60 && KNOWN_HEADING.test(canon(t).replace(/:$/, ""))) return t.replace(/:$/, "");
   return null;
+}
+
+function statedPriority(text: string): RequirementPriority | null {
+  const pref = PREFERRED_WORDS.test(text);
+  const req = REQUIRED_WORDS.test(text) && !NEGATED_REQUIRED.test(text);
+  if (pref && req) return "unspecified"; // says both: not established
+  if (pref) return "preferred";
+  if (req) return "required";
+  return null;
+}
+
+export function priorityFor(lineText: string, heading: string | null): RequirementPriority {
+  // The line's own wording wins over its section.
+  const inline = statedPriority(canon(lineText));
+  if (inline) return inline;
+  if (NEGATED_REQUIRED.test(canon(lineText))) return "unspecified";
+  if (heading) {
+    if (OTHER_HEADING.test(heading)) return "unspecified";
+    return statedPriority(heading) ?? "unspecified";
+  }
+  return "unspecified";
 }
 
 interface SourceLine {
@@ -78,17 +117,6 @@ function sourceLines(source: string): SourceLine[] {
   return out;
 }
 
-export function priorityFor(lineText: string, heading: string | null): RequirementPriority {
-  const t = canon(lineText);
-  if (/\b(?:preferred|a plus|is a plus|nice to have|bonus|desired|ideally)\b/.test(t)) return "preferred";
-  if (/\b(?:required|must|mandatory)\b/.test(t)) return "required";
-  if (heading) {
-    if (PREFERRED_HEADING.test(heading)) return "preferred";
-    if (OTHER_HEADING.test(heading)) return "unspecified";
-    if (REQUIRED_HEADING.test(heading)) return "required";
-  }
-  return "unspecified";
-}
 
 /** Appears in the listing (or equals the page title)? Returns the listing's own wording when found. */
 function verbatim(value: string | null, source: string, pageTitle: string | null): string | null {
@@ -209,16 +237,24 @@ function recoverOriginal(raw: string, canonStart: number, canonLen: number): str
  * verbatim. Never used when hosted (see importConfigProblems).
  */
 export function proposeWithStub(listing: string): ModelProposal {
-  const lines = listing.split(/\r?\n/);
-  const title = lines.find((l) => /^#\s+/.test(l))?.replace(/^#\s+/, "") ?? null;
-  const employerLine = lines.find((l) => /—/.test(l) && !/^#/.test(l)) ?? null;
-  const [employer, location] = employerLine ? employerLine.split("—").map((s) => s.trim()) : [null, null];
-  let section = "";
+  const lines = listing.split(/\r?\n/).map((l) => l.trim());
+  const nonEmpty = lines.filter(Boolean);
+  const title = (nonEmpty.find((l) => /^#\s+/.test(l))?.replace(/^#\s+/, "") ?? nonEmpty[0] ?? "").replace(/^#+\s*/, "") || null;
+  // "Employer — Location" (or " - " / " | ") on the line after the title.
+  const second = nonEmpty[1] && !isHeading(nonEmpty[1]) ? nonEmpty[1] : null;
+  const parts = second?.split(/\s+[—|-]\s+/) ?? [];
+  const [employer, location] = parts.length >= 2 ? [parts[0], parts.slice(1).join(" - ")] : [null, null];
+  let section: string | null = null;
   const reqs: ModelProposal["requirements"] = [];
   for (const l of lines) {
-    const h = l.match(/^#{2,6}\s+(.+)/);
-    if (h) section = canon(h[1]);
-    else if (/^\s*[-*]\s+/.test(l) && /requirement|preferred|qualification/.test(section)) reqs.push({ text: l.replace(/^\s*[-*]\s+/, "").trim(), category: null });
+    if (!l) continue;
+    const h = isHeading(l);
+    if (h) {
+      section = /^#\s/.test(l) ? null : canon(h); // a top-level "# Title" is the title, not a section
+      continue;
+    }
+    // Every line under a heading that isn't about the company, duties or benefits.
+    if (section !== null && !OTHER_HEADING.test(section)) reqs.push({ text: l.replace(/^(?:[-*•]|\d{1,2}[.)])\s+/, ""), category: null });
   }
-  return { title, employer, location: location ?? null, requirements: reqs, incomplete: false };
+  return { title, employer, location, requirements: reqs, incomplete: false };
 }

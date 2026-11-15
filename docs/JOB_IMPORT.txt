@@ -52,13 +52,32 @@ deterministically from the employer's **original** wording:
   education and schedule wording → **Can't assess automatically** (`cannot_assess`).
 - Two phrases become an all-of rule only when joined by an explicit conjunction (`and`, a comma, `as well as`);
   `with`/`in`/`for` never split a line. Each part is evaluated separately and the line takes the weakest result.
-- Scope terms must be stated in the record (negated sentences ignored); a record missing one is "needs review",
-  never "evidence found".
+- Scope terms must be stated in the record's **headline**: its title, skills and activities, with negated segments
+  ignored. Free-text summaries never satisfy a term, so "startup was done by another crew" cannot count as startup
+  work. A record missing a term is "needs review", never "evidence found". Install-only evidence never reaches
+  "evidence found" for an install-and-startup line, whatever its verification status or similarity (regression
+  tests in `tests/matching/evaluate-rules.test.ts`).
 - Seeded and sample requirements have no rule and evaluate exactly as before.
 
 `cannot_assess` is stored in `requirement_results` (constraint widened), accepted by `finalize_match_run`, and shown
 in labels, the constellation, counts, changes, the fit summary and the report, with the note that it says nothing
 about whether the person meets the requirement. It never adds "missing documentation".
+
+## Priority (read from the listing, never guessed)
+
+`priorityFor(line, heading)` in `lib/server/imports/structure-check.ts`:
+
+1. The line's own wording wins over its section ("NATE certification is a plus" under Requirements → preferred).
+2. A line or heading that says both required and preferred → **Priority not stated** (`unspecified`).
+3. "Not required" is never read as required.
+4. Section headings that state it: Requirements, Minimum/Required qualifications, What you'll need → required;
+   Preferred qualifications, Nice to have, Bonus points → preferred.
+5. Bare "Qualifications", "Skills", "What we're looking for", Responsibilities, no heading → unspecified.
+
+Plain-text listings (no Markdown) are supported: a line counts as a heading only if it is on a fixed list
+(`KNOWN_HEADING`), so short requirement lines like "NATE certification" are never mistaken for headings. Lines under
+Benefits/About-style sections are excluded. The technician can change priority on review; the listing's priority is
+kept next to it.
 
 ## Review edits
 
@@ -87,7 +106,12 @@ result exists). `opportunity_import_expire()` clears expired drafts; no schedule
   `tests/imports/*.test.ts` (URL/DNS, TinyFish client, verbatim check, orchestration).
 - Database (disposable Postgres): `tests/db/job-import.test.ts` (concurrent lease and confirm, expiry, ownership,
   browser-role denial, `cannot_assess` through `finalize_match_run`, rollback).
-- Browser (isolated local stack, stub): `scripts/e2e-import.mts`.
+- Browser (isolated local stack, stub): `scripts/e2e-import.mts` (URL and pasted plain-text journeys through to
+  the printable report), then `scripts/e2e-import.mts flag-off` after restarting with the flag off (saved jobs and
+  reports stay readable, a stale run stays unprintable, import routes answer 404). The local match runs there are
+  labelled fixtures because the isolated stack has no Supermemory.
+- `npm run test:db` assumes Postgres on 5432; for the Supabase CLI stack set
+  `TEST_DATABASE_ADMIN_URL=postgres://postgres:postgres@127.0.0.1:54322/postgres` and run `npx vitest run tests/db`.
 
 ## Limitations
 

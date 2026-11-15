@@ -6,7 +6,9 @@
 // rules stored for an imported job, this script evaluates directly (every record as a candidate, no memory search)
 // and saves that run through finalize_match_run, labelled as a local test fixture.
 //
-//   (set the same local env as the app) npx tsx scripts/e2e-import.mts
+//   (set the same local env as the app) npx tsx scripts/e2e-import.mts            # flag on: both journeys
+//   then restart the app with OPPORTUNITY_IMPORT_ENABLED=false and: npx tsx scripts/e2e-import.mts flag-off
+// The fictional account's local-only credentials are kept between phases in E2E_STATE (mode 600).
 import { randomBytes, randomUUID, createHash } from "node:crypto";
 import puppeteer, { type Page } from "puppeteer-core";
 import { createClient } from "@supabase/supabase-js";
@@ -14,6 +16,9 @@ import { evaluateRequirement } from "../lib/server/matching/evaluate";
 import { toDbPayload } from "../lib/server/matching/payload";
 import { toRequirement, type RequirementRow } from "../lib/server/opportunities/mappers";
 import { EVIDENCE_COLUMNS, toEvidence, type EvidenceRow } from "../lib/supabase/mappers";
+import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const APP = process.env.E2E_APP_URL ?? "http://localhost:3100";
 const SB = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
@@ -46,11 +51,91 @@ async function clickText(p: Page, label: string) {
   if (!ok) throw new Error(`no clickable "${label}"`);
 }
 
+const PHASE = process.argv[2] ?? "flag-on";
+const STATE = process.env.E2E_STATE ?? join(tmpdir(), "qualitrail-e2e-import-state.json");
 const run = randomUUID().slice(0, 6);
 const email = `import-${run}@test.qualitrail.dev`;
 const password = `Qt-${randomBytes(18).toString("base64url")}`;
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: true });
 const errors: string[] = [];
+
+/** Evaluate an imported job's STORED rules with the real evaluator and save via finalize_match_run (local fixture). */
+async function evaluateAndSave(workerId: string, oppId: string) {
+  const reqRows = ((await admin.from("requirements").select("*").eq("opportunity_id", oppId).order("position")).data ?? []) as RequirementRow[];
+  const evRows = ((await admin.from("evidence").select(EVIDENCE_COLUMNS).eq("worker_id", workerId)).data ?? []) as unknown as EvidenceRow[];
+  const evidence = evRows.map(toEvidence);
+  const res = reqRows.map(toRequirement).map((r) => evaluateRequirement(r, evidence.map((e) => ({ evidence: e, memorySimilarity: null })), new Date().toISOString().slice(0, 10)));
+  const started = await admin.rpc("start_match_run", { p_worker_id: workerId, p_opportunity_id: oppId });
+  const runId = (started.data as { id: string }[])[0].id;
+  const db = toDbPayload(res);
+  const fin = await admin.rpc("finalize_match_run", { p_worker_id: workerId, p_run_id: runId, p_results: db.results, p_matches: db.matches, p_memory_warning: "LOCAL TEST FIXTURE: evaluated directly without memory search." });
+  return { status: fin.data as string, results: res };
+}
+
+async function signIn(e: string, pw: string) {
+  const p = await (await browser.createBrowserContext()).newPage();
+  p.setDefaultTimeout(30000);
+  p.on("pageerror", (x) => errors.push(x instanceof Error ? x.message : String(x)));
+  await p.goto(`${APP}/sign-in`, { waitUntil: "networkidle0" });
+  await p.type("input[name=email]", e);
+  await p.type("input[name=password]", pw);
+  await clickText(p, "Sign in");
+  await p.waitForFunction(() => location.pathname !== "/sign-in");
+  return p;
+}
+
+async function openReport(p: Page, oppId: string) {
+  await p.goto(`${APP}/reports`, { waitUntil: "networkidle0" });
+  await p.waitForSelector("select[aria-label=Job]");
+  await p.select("select[aria-label=Job]", oppId);
+  await p.waitForFunction(() => document.body.innerText.includes("Requirement by requirement"), { timeout: 30000 });
+  await sleep(800);
+  return text(p);
+}
+const printable = (p: Page) => p.evaluate(() => !([...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Print or save as PDF")) as HTMLButtonElement)?.disabled);
+
+if (PHASE === "flag-off") {
+  // Saved work must stay readable when new imports are switched off.
+  try {
+    const st = JSON.parse(readFileSync(STATE, "utf8")) as { email: string; password: string; urlJob: string; pastedJob: string; importId: string };
+    const p = await signIn(st.email, st.password);
+    const me = await api(p, "/api/me");
+    check("/api/me reports job import off", me.j?.features?.jobImport === false, JSON.stringify(me.j?.features));
+    check("starting an import answers 404", (await api(p, "/api/imports", "POST", { text: "x".repeat(60) })).s === 404);
+    check("reading an import draft answers 404", (await api(p, `/api/imports/${st.importId}`)).s === 404);
+    await p.goto(`${APP}/opportunities?job=${st.pastedJob}`, { waitUntil: "networkidle0" });
+    await p.waitForFunction(() => document.body.innerText.includes("Your evidence fit"));
+    const page = await text(p);
+    check("import card hidden", !page.includes("See how your experience fits a job"));
+    check("confirmed pasted job still opens with provenance, wording and fit summary", page.includes("Requirements quoted from listing text you supplied") && page.includes("Your evidence fit") && page.includes("EPA 608 Universal certification required"));
+    const listed = await api(p, "/api/opportunities");
+    check("both confirmed imported jobs still listed with import details", [st.urlJob, st.pastedJob].every((id) => listed.j?.opportunities?.some((o: { id: string; importInfo: unknown }) => o.id === id && o.importInfo)));
+    // The flag-on phase added a record AFTER the URL job's run was saved, so that run is stale: readable, but printing
+    // must stay off until matching runs again. The pasted job was matched after that record, so it stays printable.
+    for (const [name, id, expectPrintable] of [["URL", st.urlJob, false], ["pasted", st.pastedJob, true]] as const) {
+      const report = await openReport(p, id);
+      const parts = {
+        cannotAssess: report.includes("Can't assess automatically"),
+        fit: report.includes("Your evidence fit"),
+        printable: await printable(p),
+        staleNotice: report.includes("Results are out of date"),
+      };
+      const ok = parts.cannotAssess && parts.fit && parts.printable === expectPrintable && parts.staleNotice === !expectPrintable;
+      check(`${name} job report readable with four-way counts; ${expectPrintable ? "printable (current run)" : "printing off (stale run)"}`, ok, JSON.stringify(parts));
+    }
+    const latest = await api(p, `/api/matches/latest?opportunityId=${st.pastedJob}`);
+    check("saved match run still served", latest.s === 200 && latest.j?.matchRun?.status === "completed");
+  } catch (e) {
+    check("aborted", false, (e as Error).message);
+  } finally {
+    check("no uncaught page errors", errors.length === 0, errors.slice(0, 2).join(" | "));
+    await browser.close();
+    const failed = results.filter((r) => !r).length;
+    console.log(`\ne2e-import flag-off: ${results.length - failed}/${results.length} passed`);
+    process.exit(failed ? 1 : 0);
+  }
+}
+
 try {
   // Fictional technician with two fictional records.
   const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
@@ -162,8 +247,84 @@ try {
   check("report keeps employer wording and labels the technician's", report.includes("EPA 608 Type II or Universal certification") && report.includes("Technician's wording (display only): EPA 608 (Type II or Universal)"));
   check("report discloses retrieval and removal", report.includes("quoted word-for-word from the public listing") && report.includes("removed 1 listing line"));
   check("report explains cannot_assess without judging the person", report.includes("It says nothing about whether you meet it"));
-  const printable = await p.evaluate(() => !([...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Print or save as PDF")) as HTMLButtonElement)?.disabled);
-  check("current run can be printed", printable);
+  check("current run can be printed", await printable(p));
+
+  // 6. Pasted description: ordinary listing text with NO Markdown, through the UI, to a report.
+  const PLAIN = [
+    "HVAC Service Technician (fictional test listing)",
+    "Fictional Comfort Co. - Mesa, AZ",
+    "",
+    "About the role",
+    "We install and service residential heat pumps. This listing is invented for a QualiTrail test.",
+    "",
+    "Responsibilities",
+    "Install and start up heat pump systems",
+    "",
+    "What you'll need:",
+    "EPA 608 Universal certification required.",
+    "Experience installing and starting up heat pumps",
+    "Valid driver's license",
+    "",
+    "Nice to have:",
+    "NATE certification",
+    "",
+    "Also:",
+    "OSHA 10 card preferred",
+    "Brazing experience",
+    "",
+    "Benefits",
+    "Paid time off",
+  ].join("\n");
+  const doc = await admin.from("evidence").insert({ worker_id: workerId, type: "certification", title: "EPA 608 Universal certification card (FICTIONAL)", source_date: "2023-05-02", issuer: "Fictional Certifying Body", structured_data: { skills: [], activities: [], equipment: [], expirationDate: null, credentialNumber: null, summary: null }, source_kind: "seed", file_hash: sha(`doc${run}`), verification_status: "document_supplied", is_synthetic: true });
+  check("a fictional supplied EPA document added", !doc.error, doc.error?.code);
+  await p.goto(`${APP}/opportunities`, { waitUntil: "networkidle0" });
+  await clickText(p, "Paste the listing text instead");
+  await p.waitForSelector("textarea[name=text]");
+  await p.$eval("textarea[name=text]", (el, v) => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, v);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  }, PLAIN);
+  await clickText(p, "Import job");
+  await p.waitForFunction(() => location.pathname.startsWith("/opportunities/import/"), { timeout: 60000 });
+  await p.waitForFunction(() => document.body.innerText.includes("Confirm and compare"));
+  const pastedImport = new URL(p.url()).pathname.split("/").pop()!;
+  const pr = await text(p);
+  check("pasted review: 6 lines quoted from the text", /Requirements \(6 of 6 kept\)/.test(pr));
+  check("pasted review labelled as supplied by the technician", pr.includes("Listing text supplied by you, not retrieved from the employer."));
+  const pv = await api(p, `/api/imports/${pastedImport}`);
+  const lines = (pv.j?.draft?.lines ?? []) as { originalText: string; originalPriority: string }[];
+  check("priorities read from the text (inline + headings; unspecified when not stated)", JSON.stringify(lines.map((l) => l.originalPriority)) === JSON.stringify(["required", "required", "required", "preferred", "preferred", "unspecified"]), JSON.stringify(lines.map((l) => [l.originalText, l.originalPriority])));
+  check("title, employer and location taken from the text", pv.j?.draft?.title === "HVAC Service Technician (fictional test listing)" && pv.j?.draft?.employer === "Fictional Comfort Co." && pv.j?.draft?.location === "Mesa, AZ");
+  const confirmBtnDisabled = await p.evaluate(() => ([...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Confirm and compare")) as HTMLButtonElement).disabled);
+  check("confirm is disabled until the warnings are acknowledged", confirmBtnDisabled);
+  await p.evaluate(() => ([...document.querySelectorAll("label")].find((l) => l.textContent?.includes("I've read the warnings"))!.querySelector("input") as HTMLInputElement).click());
+  await clickText(p, "Confirm and compare");
+  await p.waitForFunction(() => location.pathname === "/opportunities" && location.search.includes("job="), { timeout: 60000 });
+  const pastedJob = new URL(p.url()).searchParams.get("job")!;
+  const pastedOpp = (await admin.from("opportunities").select("source_kind, source_url, import_warnings, title, employer, location").eq("id", pastedJob).single()).data;
+  check("pasted job saved as supplied text, no source URL, warning kept", pastedOpp?.source_kind === "pasted_text" && pastedOpp?.source_url === null && pastedOpp?.import_warnings?.length === 1 && pastedOpp?.location === "Mesa, AZ");
+  const pq = ((await admin.from("requirements").select("original_text, priority, original_priority, mandatory").eq("opportunity_id", pastedJob).order("position")).data ?? []);
+  check("requirements stored verbatim with priorities; preferred lines not mandatory", pq.length === 6 && pq[0].original_text === "EPA 608 Universal certification required" && pq.map((r) => r.priority).join() === "required,required,required,preferred,preferred,unspecified" && pq.map((r) => r.mandatory).join() === "true,true,true,false,false,true");
+  const pastedRun = await evaluateAndSave(workerId, pastedJob);
+  const got = pastedRun.results.map((r) => r.assessment);
+  check("finalize stored the run", pastedRun.status === "completed");
+  check(
+    "assessments: EPA documented, install+startup self-reported, licence/brazing/OSHA/NATE honest",
+    JSON.stringify(got) === JSON.stringify(["evidence_found", "needs_review", "cannot_assess", "no_sufficient_evidence", "no_sufficient_evidence", "no_sufficient_evidence"]),
+    JSON.stringify(got),
+  );
+  check("evidence links: EPA line links the supplied document directly", pastedRun.results[0].connections.some((c) => c.role === "direct" && c.verificationStatus === "document_supplied"));
+  check("cannot_assess adds no missing documentation", pastedRun.results[2].missingDocumentation.length === 0);
+  await p.goto(`${APP}/opportunities?job=${pastedJob}`, { waitUntil: "networkidle0" });
+  await p.waitForFunction(() => document.body.innerText.includes("Your evidence fit"));
+  const fit = (await text(p)).split("Your evidence fit")[1];
+  check("fit summary: Required (3) / Preferred (2) / Priority not stated (1)", /Required \(3\)/.test(fit) && /Preferred \(2\)/.test(fit) && /Priority not stated \(1\)/.test(fit));
+  const prep = await openReport(p, pastedJob);
+  check("pasted report: supplied-text provenance and acknowledged warning", prep.includes("listing text the technician supplied") && prep.includes("Import warnings acknowledged by the technician"));
+  check("pasted report: counts and priorities", /Evidence found\s*1/.test(prep) && /Can't assess automatically\s*1/.test(prep) && prep.includes("Priority not stated"));
+  check("pasted report: supporting record listed for the EPA line", prep.includes("EPA 608 Universal certification card (FICTIONAL)"));
+  check("pasted report printable", await printable(p));
+  writeFileSync(STATE, JSON.stringify({ email, password, urlJob: oppId, pastedJob, importId }), { mode: 0o600 });
 } catch (e) {
   check("aborted", false, (e as Error).message);
 } finally {

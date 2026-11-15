@@ -128,10 +128,14 @@ interface ClassifyOptions {
   termGroups?: string[][];
 }
 
-/** Record text for term groups: every segment except those that negate ("did not install"). */
+/**
+ * Record text for term groups: the record's HEADLINE only (title, skills, activities), minus any segment that
+ * negates ("did not install"). A summary or equipment list that merely mentions a term ("startup was done by
+ * another crew") is not the record stating it did that work, so it can never satisfy a scope term.
+ */
 function affirmedText(e: Evidence): string {
   const d = e.structuredData;
-  const segments = [e.title, ...d.skills, ...d.activities, ...d.equipment, ...(d.summary ?? "").split(/[.;\n]+/)];
+  const segments = [e.title, ...d.skills, ...d.activities];
   return segments.map(norm).filter((s) => s && !/\b(?:not|never|no|without)\b/.test(s)).join(" \n ");
 }
 

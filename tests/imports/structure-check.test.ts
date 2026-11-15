@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDraft, priorityFor } from "@/lib/server/imports/structure-check";
+import { buildDraft, isHeading, priorityFor } from "@/lib/server/imports/structure-check";
 import { STUB_LISTINGS } from "@/lib/server/imports/tinyfish";
 import { proposeWithStub } from "@/lib/server/imports/structure-check";
 import { ImportDraft } from "@/lib/types/imports";
@@ -87,4 +87,81 @@ it("the local stub drafts the fictional listing deterministically and verbatim",
   expect(draft.lines).toHaveLength(6);
   expect(draft.failedLines).toBe(0);
   expect(draft.lines.filter((x) => x.originalPriority === "preferred").map((x) => x.originalText)).toEqual(["NATE certification", "Brazing experience"]);
+});
+
+describe("priority from ordinary employer formatting (never guessed)", () => {
+  it.each([
+    // inline wording on the line itself
+    ["EPA 608 Universal certification required.", null, "required"],
+    ["Required: EPA 608 certification", null, "required"],
+    ["Must have EPA 608 certification", null, "required"],
+    ["NATE certification preferred", null, "preferred"],
+    ["Preferred: NATE certification", null, "preferred"],
+    ["NATE certification is a plus", "requirements", "preferred"], // the line's own words win over its section
+    ["Brazing experience a plus but not required", "requirements", "preferred"],
+    // not established -> unspecified
+    ["College degree not required", "requirements", "unspecified"],
+    ["EPA 608 required; NATE preferred", null, "unspecified"], // says both
+    ["EPA 608 certification", null, "unspecified"],
+    ["EPA 608 certification", "qualifications", "unspecified"], // a bare Qualifications heading doesn't say required
+    ["EPA 608 certification", "skills", "unspecified"],
+    ["EPA 608 certification", "required and preferred qualifications", "unspecified"],
+    ["EPA 608 certification", "what we're looking for", "unspecified"],
+    ["EPA 608 certification", "responsibilities", "unspecified"],
+    // stated by the section
+    ["EPA 608 certification", "requirements", "required"],
+    ["EPA 608 certification", "minimum qualifications", "required"],
+    ["EPA 608 certification", "what you'll need", "required"],
+    ["EPA 608 certification", "preferred qualifications", "preferred"],
+    ["EPA 608 certification", "nice to have", "preferred"],
+    ["EPA 608 certification", "bonus points", "preferred"],
+  ])("%s | heading %s -> %s", (line, heading, expected) => expect(priorityFor(line, heading)).toBe(expected));
+});
+
+describe("plain-text listing without Markdown", () => {
+  const PLAIN = `HVAC Service Technician (fictional test listing)
+Fictional Comfort Co. - Mesa, AZ
+
+About the role
+We install and service residential heat pumps. This listing is invented for a QualiTrail test.
+
+Responsibilities
+Install and start up heat pump systems
+
+What you'll need:
+EPA 608 Universal certification required.
+Experience installing heat pumps
+Valid driver's license
+
+Nice to have:
+NATE certification
+
+Also:
+OSHA 10 card preferred
+Brazing experience
+
+Benefits
+Paid time off`;
+
+  it("recognises plain headings from a fixed list only and reads priority from the listing", () => {
+    const { draft, warnings } = buildDraft(proposeWithStub(PLAIN), { text: PLAIN, pageTitle: null, sentTruncated: false, storedTruncated: false, kind: "pasted_text" });
+    expect(draft.lines.map((l) => [l.originalText, l.originalPriority])).toEqual([
+      ["EPA 608 Universal certification required", "required"], // trailing punctuation is not kept
+      ["Experience installing heat pumps", "required"],
+      ["Valid driver's license", "required"],
+      ["NATE certification", "preferred"],
+      ["OSHA 10 card preferred", "preferred"],
+      ["Brazing experience", "unspecified"], // "Also:" states no priority
+    ]);
+    expect(draft.title).toBe("HVAC Service Technician (fictional test listing)");
+    expect(draft.employer).toBe("Fictional Comfort Co.");
+    expect(draft.location).toBe("Mesa, AZ");
+    expect(draft.failedLines).toBe(0);
+    expect(warnings).toEqual(["This listing text was supplied by you, not retrieved from the employer's page."]);
+  });
+
+  it("short requirement lines are never mistaken for headings", () => {
+    for (const l of ["NATE certification", "Brazing experience", "EPA 608", "OSHA 10", "Heat pumps"]) expect(isHeading(l)).toBeNull();
+    for (const l of ["Qualifications", "REQUIREMENTS", "Preferred Qualifications", "Nice to have", "What you'll need"]) expect(isHeading(l)).not.toBeNull();
+  });
 });
