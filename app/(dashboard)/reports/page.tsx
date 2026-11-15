@@ -81,7 +81,7 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
         <header className="flex flex-wrap items-start justify-between gap-4 border-b-2 border-navy pb-5">
           <div>
             <p className="font-display text-lg font-bold">
-              Installer<span className="text-orange-ink">OS</span>
+              Quali<span className="text-orange-ink">Trail</span>
             </p>
             <h2 className="font-display text-4xl font-semibold tracking-tight">Qualification packet</h2>
           </div>
@@ -214,7 +214,7 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
 
         <section className="mt-8 break-inside-avoid">
           <h3 className="font-display text-xl font-semibold">Source references</h3>
-          <p className="text-sm text-slate">Originals are held in the technician&apos;s private InstallerOS storage and shared only with their permission.</p>
+          <p className="text-sm text-slate">Originals are held in the technician&apos;s private QualiTrail storage and shared only with their permission.</p>
           <ul className="mt-2 divide-y divide-line text-sm">
             {sources.map((s) => (
               <li key={s.evidenceId} className="flex flex-wrap justify-between gap-x-4 py-2">

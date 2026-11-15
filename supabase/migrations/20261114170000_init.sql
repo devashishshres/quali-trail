@@ -1,4 +1,4 @@
--- InstallerOS initial schema
+-- QualiTrail initial schema
 -- Owner: Developer B
 --
 -- Design rules enforced IN THE DATABASE (not just in app code):

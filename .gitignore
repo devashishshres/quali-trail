@@ -66,6 +66,3 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# ---------- local leftovers ----------
-# Original backend folder, already merged into the app root.
-/installeros-backend-phase1/

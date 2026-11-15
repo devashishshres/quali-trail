@@ -29,7 +29,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(path, { ...init, cache: "no-store" });
   } catch {
-    throw new ApiRequestError("internal", 0, "Can't reach the InstallerOS server. Check your connection and try again.");
+    throw new ApiRequestError("internal", 0, "Can't reach the QualiTrail server. Check your connection and try again.");
   }
 
   const body = await res.json().catch(() => null);

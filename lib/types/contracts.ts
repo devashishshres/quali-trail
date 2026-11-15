@@ -1,5 +1,5 @@
 /**
- * InstallerOS shared contracts — the single source of truth for
+ * QualiTrail shared contracts — the single source of truth for
  * frontend (Developer A) and backend (Developer B).
  *
  * Rule: every type is derived from a Zod schema with `z.infer`, so the

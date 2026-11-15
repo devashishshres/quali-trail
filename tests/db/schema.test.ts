@@ -15,7 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEMO_EVIDENCE, DEMO_WORKER } from "../../supabase/seed/demo-data";
 
 const ADMIN_URL = process.env.TEST_DATABASE_ADMIN_URL;
-const DB_NAME = "installeros_test";
+const DB_NAME = "qualitrail_test";
 const ROOT = join(__dirname, "..", "..");
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");

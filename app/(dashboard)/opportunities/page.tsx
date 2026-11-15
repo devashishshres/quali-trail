@@ -20,7 +20,7 @@ export default function OpportunitiesPage() {
 
   return (
     <>
-      <PageHeader title="Opportunities" lede="Pick a job, then let InstallerOS search your history for evidence that fits each requirement.">
+      <PageHeader title="Opportunities" lede="Pick a job, then let QualiTrail search your history for evidence that fits each requirement.">
         {list.length > 1 && (
           <label className="text-sm">
             <span className="mb-1 block font-semibold">Job</span>

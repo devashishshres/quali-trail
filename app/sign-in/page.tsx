@@ -29,7 +29,7 @@ export default function SignInPage() {
     <main className="grid min-h-dvh lg:grid-cols-[1fr_minmax(420px,40%)]">
       <section className="relative hidden overflow-hidden bg-navy p-12 text-white lg:flex lg:flex-col lg:justify-between">
         <p className="font-display text-3xl font-bold">
-          Installer<span className="text-orange">OS</span>
+          Quali<span className="text-orange">Trail</span>
         </p>
         <div className="max-w-md">
           <p className="font-display text-6xl font-semibold leading-[0.95] tracking-tight">
@@ -71,7 +71,7 @@ export default function SignInPage() {
                 {busy ? "Signing in…" : "Sign in"}
               </button>
               <p className="text-sm text-slate">
-                Demo account: <span className="font-medium text-navy">alex.morgan@demo.installeros.dev</span>. The password is
+                Demo account: <span className="font-medium text-navy">alex.morgan@demo.qualitrail.dev</span>. The password is
                 DEMO_USER_PASSWORD from your seed environment.
               </p>
             </form>
