@@ -22,28 +22,33 @@ const Items = z.array(RequirementExplanation);
 /** Table missing (migration not applied yet): explanations simply don't exist. */
 const missingTable = (code?: string) => code === "42P01" || code === "PGRST205" || code === "PGRST202" || code === "42883";
 
-function toExplanations(row: Row, current: Map<string, number> | null): RunExplanations | null {
-  if (row.status !== "completed" || !row.ai_status) return { runId: row.match_run_id, status: row.status, aiStatus: row.ai_status ?? "skipped", rejectedReferences: row.rejected_references, generatedAt: row.updated_at, items: [] };
+/**
+ * `current` is the worker's current record versions; `runCurrent` is false when the run itself is out of date. The
+ * cache key is the match run, which is pinned to one evidence revision; each cited record's version is also stored.
+ * An explanation is only CURRENT when its run is current and every cited record is unchanged.
+ */
+export function toExplanations(row: Row, current: Map<string, number> | null, runCurrent = true): RunExplanations | null {
+  if (row.status !== "completed" || !row.ai_status) return { runId: row.match_run_id, status: row.status, aiStatus: row.ai_status ?? "skipped", rejectedReferences: row.rejected_references, generatedAt: row.updated_at, current: runCurrent, items: [] };
   const parsed = Items.safeParse(row.items);
   if (!parsed.success) return null; // never show something that does not match the contract
   const items = parsed.data.map((it) => {
     if (!current) return it;
     // A cited record that was deleted is dropped; one that changed marks the explanation as out of date.
     const related = it.related.filter((r) => current.has(r.evidenceId));
-    const stale = related.length !== it.related.length || related.some((r) => current.get(r.evidenceId) !== r.evidenceVersion);
+    const stale = !runCurrent || related.length !== it.related.length || related.some((r) => current.get(r.evidenceId) !== r.evidenceVersion);
     return { ...it, related, stale };
   });
-  return RunExplanations.parse({ runId: row.match_run_id, status: row.status, aiStatus: row.ai_status, rejectedReferences: row.rejected_references, generatedAt: row.updated_at, items });
+  return RunExplanations.parse({ runId: row.match_run_id, status: row.status, aiStatus: row.ai_status, rejectedReferences: row.rejected_references, generatedAt: row.updated_at, current: runCurrent && !items.some((i) => i.stale), items });
 }
 
 /** The run's explanation, checked against the worker's CURRENT records. Null when none exists. */
-export async function readExplanations(admin: SupabaseClient, workerId: string, runId: string, evidence: Pick<Evidence, "id" | "version">[]): Promise<RunExplanations | null> {
+export async function readExplanations(admin: SupabaseClient, workerId: string, runId: string, evidence: Pick<Evidence, "id" | "version">[], runCurrent: boolean): Promise<RunExplanations | null> {
   const { data, error } = await admin.from("match_run_explanations").select(COLUMNS).eq("match_run_id", runId).eq("worker_id", workerId).maybeSingle<Row>();
   if (error) {
     if (missingTable(error.code)) return null;
     throw new Error(`explanation query failed (${error.code})`);
   }
-  return data ? toExplanations(data, new Map(evidence.map((e) => [e.id, e.version]))) : null;
+  return data ? toExplanations(data, new Map(evidence.map((e) => [e.id, e.version])), runCurrent) : null;
 }
 
 export function explanationPorts(args: { admin: SupabaseClient; workerId: string; search: MemorySearcher; jobTitle: string }): ExplainPorts {

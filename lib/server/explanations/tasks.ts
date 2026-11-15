@@ -15,7 +15,7 @@ import type { Evidence } from "@/lib/types";
 import type { TaskBreakdown, TaskPart, TaskPartStatus } from "@/lib/types/explanations";
 import { normalizeLine } from "../opportunities/requirement-rules";
 
-interface TaskTerm {
+export interface TaskTerm {
   id: string;
   label: string;
   /** Normalised phrases (see normalizeLine: lower case, hyphens to spaces). Explicit forms only. */
@@ -180,4 +180,14 @@ export function taskBreakdown(originalText: string, records: Evidence[]): TaskBr
   const prefix = split.connector === "any" ? "The line accepts any one of these. " : "";
   const tail = split.uncoveredWording ? " Other wording in the line is not checked here." : "";
   return { connector: split.connector, parts, uncoveredWording: split.uncoveredWording, sentence: `${prefix}${cap(body)}.${tail}`.slice(0, 600) };
+}
+
+/** Task terms named anywhere in a piece of text (used to check AI-written text against the breakdown). */
+export function tasksIn(text: string): TaskTerm[] {
+  return [...new Set(findTasks(normalizeLine(text)).map((h) => h.term))];
+}
+
+/** The most supportive status any of these records gives a task (same ranking as the breakdown). */
+export function bestTaskStatus(term: TaskTerm, records: Evidence[]): TaskPartStatus {
+  return records.map((e) => recordTaskStatus(term, e)).sort((a, b) => RANK.indexOf(a) - RANK.indexOf(b))[0] ?? "not_found";
 }

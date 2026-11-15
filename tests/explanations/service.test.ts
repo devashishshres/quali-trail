@@ -105,11 +105,44 @@ describe("explainRun", () => {
     expect(x.items[0].asks).toBeNull();
   });
 
-  it("stub bad reference is rejected and counted", async () => {
-    const { ports } = fakePorts({ propose: (input) => explainWithStub(input, { jobTitle: "Fictional (stub:bad-ref)" }) });
-    const x = ((await explainRun(ports, { run: run(), opportunity, evidence })) as { explanations: RunExplanations }).explanations;
+  const withHook = async (hook: string) => {
+    const { ports } = fakePorts({ propose: (input) => explainWithStub(input, { jobTitle: `Fictional (${hook})` }) });
+    return ((await explainRun(ports, { run: run(), opportunity, evidence })) as { explanations: RunExplanations }).explanations;
+  };
+
+  it("an unknown record reference withholds that whole explanation and is counted", async () => {
+    const x = await withHook("stub:bad-ref");
     expect(x.rejectedReferences).toBe(1);
-    expect(x.items[0].related.map((i) => i.evidenceId)).toEqual([brazing.id]);
+    expect(x.items[0]).toMatchObject({ kind: "ai_unavailable", withheld: "unknown_reference", asks: null, related: [] });
+    expect(x.items[0].breakdown!.sentence).toMatch(/^Brazing documented/); // deterministic content kept
+  });
+
+  it.each([
+    ["stub:claim", "fulfilment_claim"],
+    ["stub:soft-claim", "worker_claim"],
+  ])("%s: an ungrounded claim about the worker is withheld (%s)", async (hook, why) => {
+    expect((await withHook(hook)).items[0]).toMatchObject({ kind: "ai_unavailable", withheld: why, asks: null });
+  });
+
+  it("stub:contradict: AI text saying evacuation 'was performed' when no record states it is withheld", async () => {
+    const x = await withHook("stub:contradict");
+    expect(x.items[0]).toMatchObject({ kind: "ai_unavailable", withheld: "contradicts_records" });
+    expect(x.items[0].breakdown!.sentence).toMatch(/startup: done by someone else/);
+  });
+
+  it("a clean stub answer is accepted, with quoted record text and the task limitations listed", async () => {
+    const x = await withHook("plain");
+    expect(x.items[0]).toMatchObject({ kind: "ai", withheld: null });
+    // Quotes keep the record's own limitation wording ("by another crew").
+    expect(x.items[0].related[0].documents).toBe('Work performed: "Brazed line set"; Work performed: "Startup was done by another crew" (self-reported).');
+    expect(x.items[0].unclear).toContain("startup: done by someone else, according to the record");
+  });
+
+  it("repeated clicks: while one generation runs, others make no provider calls", async () => {
+    const { ports, calls } = fakePorts({ claim: async () => ({ kind: "busy" }) });
+    const outs = await Promise.all([1, 2, 3].map(() => explainRun(ports, { run: run(), opportunity, evidence })));
+    expect(outs.every((o) => o.kind === "refused")).toBe(true);
+    expect(calls.search.length + calls.propose.length).toBe(0);
   });
 
   it("every search failing: refused, row marked failed, no model call", async () => {
@@ -138,5 +171,29 @@ describe("explainRun", () => {
     const x = ((await explainRun(ports, { run: run(), opportunity, evidence })) as { explanations: RunExplanations }).explanations;
     expect(calls.propose).toHaveLength(0);
     expect(x.items.map((i) => i.kind)).toEqual(["no_related", "eligibility", "no_related"]);
+  });
+});
+
+describe("reading a stored explanation (cache per run and record versions)", async () => {
+  const { toExplanations } = await import("@/lib/server/explanations/store");
+  const item = { requirementId: lines[1].id, kind: "ai", asks: "a", related: [{ evidenceId: brazing.id, evidenceVersion: 1, evidenceTitle: "t", documents: "d" }], unclear: [], nextStep: "n", breakdown: null, clarification: null, stale: false, withheld: null };
+  const row = { match_run_id: run().id, status: "completed" as const, ai_status: "ok" as const, rejected_references: 0, items: [item], updated_at: "2026-11-15T00:00:00Z" };
+  const versions = new Map(evidence.map((e) => [e.id, e.version]));
+
+  it("current run, unchanged records → current", () => {
+    const x = toExplanations(row, versions, true)!;
+    expect(x.current).toBe(true);
+    expect(x.items[0].stale).toBe(false);
+  });
+  it("a stale run is never shown as current, even if the cited record did not change", () => {
+    const x = toExplanations(row, versions, false)!;
+    expect(x.current).toBe(false);
+    expect(x.items.every((i) => i.stale)).toBe(true);
+  });
+  it("a changed or deleted cited record marks it out of date", () => {
+    expect(toExplanations(row, new Map([[brazing.id, 2]]), true)!.current).toBe(false);
+    const gone = toExplanations(row, new Map(), true)!;
+    expect(gone.current).toBe(false);
+    expect(gone.items[0].related).toHaveLength(0);
   });
 });

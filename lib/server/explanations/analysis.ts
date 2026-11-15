@@ -16,6 +16,7 @@
 import type { Evidence, Requirement, ReviewReason } from "@/lib/types";
 import type { RelatedRecord, RequirementExplanation, TaskBreakdown } from "@/lib/types/explanations";
 import type { Candidate } from "../matching/evaluate";
+import { groundingProblem, quoteRecord, type GroundingProblem } from "./grounding";
 import { taskBreakdown } from "./tasks";
 
 /* ------------------------------------------------------------------ */
@@ -113,8 +114,6 @@ export interface ModelRecord {
   ref: string;
   type: Evidence["type"];
   title: string;
-  date: string | null;
-  issuer: string | null;
   skills: string[];
   workPerformed: string[];
   equipment: string[];
@@ -152,8 +151,6 @@ export function buildModelInput(plans: Plan[]): { input: ModelInput; refs: RefMa
         ref: r,
         type: e.type,
         title: redact(e.title).slice(0, 200),
-        date: e.date ? e.date.slice(0, 7) : null,
-        issuer: e.issuer ? redact(e.issuer).slice(0, 120) : null,
         skills: clipList(d.skills, 12, 120),
         workPerformed: clipList(d.activities, 12, 200),
         equipment: clipList(d.equipment, 8, 80),
@@ -190,16 +187,11 @@ export interface ModelItem {
   ref: string;
   asks: string;
   noRelatedEvidence: boolean;
-  related: { evidenceRef: string; documents: string }[];
+  /** Refs of supplied records the model judges related. The model never describes them (see quoteRecord). */
+  related: string[];
   unclear: string[];
   nextStep: string;
 }
-
-/** Claims the AI layer may never make: matches, qualification, eligibility, verification. */
-const UPGRADE_CLAIM =
-  /\b(?:meets?|meeting|satisf(?:y|ies|ied)|fulfil+s?) (?:this|the|that|all|each|every)\b|\b(?:is|are|be) (?:fully )?(?:qualified|eligible)\b|\bqualif(?:y|ies) (?:for|you)\b|\bconfirmed match\b|\bverified\b|\bproves?\b|\bguarantee/i;
-const ALLOWED_NEGATIVE = /\b(?:not|never|un|isn't|aren't|hasn't|haven't|has not|have not|not been|not yet) ?(?:been )?(?:independently )?verified\b|\bunverified\b/gi;
-export const claimsUpgrade = (s: string) => UPGRADE_CLAIM.test(s.replace(ALLOWED_NEGATIVE, ""));
 
 const clean = (s: unknown, n: number) => (typeof s === "string" ? s.replace(/[<>]/g, "").replace(/\s+/g, " ").trim().slice(0, n) : "");
 
@@ -212,12 +204,20 @@ export function parseModelItems(raw: unknown): ModelItem[] | null {
       ref: clean(x.ref, 10),
       asks: clean(x.asks, 500),
       noRelatedEvidence: x.noRelatedEvidence === true,
-      related: (Array.isArray(x.related) ? x.related : []).slice(0, 10).map((r) => ({ evidenceRef: clean((r as Record<string, unknown>)?.evidenceRef, 10), documents: clean((r as Record<string, unknown>)?.documents, 500) })),
+      related: (Array.isArray(x.related) ? x.related : []).slice(0, 10).map((r) => clean(typeof r === "string" ? r : (r as Record<string, unknown>)?.evidenceRef, 10)),
       unclear: (Array.isArray(x.unclear) ? x.unclear : []).slice(0, 8).map((u) => clean(u, 300)).filter(Boolean),
       nextStep: clean(x.nextStep, 500),
     };
   });
 }
+
+const UNCLEAR: Record<Exclude<TaskBreakdown["parts"][number]["status"], "documented">, string> = {
+  assisted: "assisted or observed only",
+  by_others: "done by someone else, according to the record",
+  negated: "the record says it was not done",
+  summary_only: "mentioned only in a record's summary",
+  not_found: "not stated in any related record",
+};
 
 function deterministic(p: Plan, kind: RequirementExplanation["kind"], nextStep: string | null): RequirementExplanation {
   return {
@@ -225,11 +225,12 @@ function deterministic(p: Plan, kind: RequirementExplanation["kind"], nextStep: 
     kind,
     asks: null,
     related: [],
-    unclear: p.breakdown ? p.breakdown.parts.filter((x) => x.status !== "documented").map((x) => `${x.label}: ${x.status.replace(/_/g, " ")}`).slice(0, 8) : [],
+    unclear: p.breakdown ? p.breakdown.parts.flatMap((x) => (x.status === "documented" ? [] : [`${x.label}: ${UNCLEAR[x.status]}`])).slice(0, 8) : [],
     nextStep,
     breakdown: p.breakdown,
     clarification: p.clarification,
     stale: false,
+    withheld: null,
   };
 }
 
@@ -245,48 +246,44 @@ export function deterministicItem(p: Plan): RequirementExplanation {
 }
 
 /**
- * Merge model output into explanation items. Unknown, foreign or duplicate references are rejected (and counted).
- * An item that claims an upgrade, cites nothing valid while saying evidence relates, or is missing falls back to
- * the deterministic content.
+ * Merge model output into explanation items. The WHOLE AI item is withheld (deterministic content shown instead,
+ * with the reason recorded) when it cites any record not supplied for that line, says nothing relates while citing
+ * records, cites nothing valid while saying records relate, or any of its text fails a grounding rule
+ * (grounding.ts). Record descriptions are always quoted from the records, never AI-written. The deterministic
+ * limitations of the task check are always listed first under "unclear", so they cannot be dropped.
  */
 export function validateModelItems(items: ModelItem[] | null, refs: RefMap): { explanations: RequirementExplanation[]; rejectedReferences: number } {
   let rejected = 0;
   const byRef = new Map<string, ModelItem>();
   for (const it of items ?? []) if (refs.requirementByRef.has(it.ref) && !byRef.has(it.ref)) byRef.set(it.ref, it);
 
+  const withhold = (p: Plan, reason: Withheld): RequirementExplanation => ({ ...deterministicItem(p), withheld: reason });
   const explanations = [...refs.requirementByRef.entries()].map(([qref, p]) => {
     const it = byRef.get(qref);
-    if (!it || !it.asks || !it.nextStep) return deterministicItem(p);
-    const texts = [it.asks, it.nextStep, ...it.unclear, ...it.related.map((r) => r.documents)];
-    if (texts.some(claimsUpgrade)) return deterministicItem(p);
-
+    if (!it || !it.asks || !it.nextStep) return withhold(p, "missing");
     const allowed = refs.allowed.get(qref)!;
-    const seen = new Set<string>();
-    const related: RelatedRecord[] = [];
-    for (const r of it.related) {
-      const e = refs.evidenceByRef.get(r.evidenceRef);
-      if (!allowed.has(r.evidenceRef) || !e || seen.has(r.evidenceRef) || !r.documents) {
-        rejected += 1;
-        continue;
-      }
-      seen.add(r.evidenceRef);
-      related.push({ evidenceId: e.id, evidenceVersion: e.version, evidenceTitle: e.title.slice(0, 300), documents: r.documents });
+    const unknown = it.related.filter((r) => !allowed.has(r));
+    if (unknown.length) {
+      rejected += unknown.length;
+      return withhold(p, "unknown_reference");
     }
-    if (it.noRelatedEvidence) {
-      return { ...deterministic(p, "no_related", it.nextStep), asks: it.asks, unclear: it.unclear.length ? it.unclear : deterministic(p, "no_related", null).unclear };
+    const cited = [...new Set(it.related)];
+    if (it.noRelatedEvidence ? cited.length > 0 : cited.length === 0) return withhold(p, "inconsistent");
+    const texts: [string, "asks" | "unclear" | "nextStep"][] = [[it.asks, "asks"], [it.nextStep, "nextStep"], ...it.unclear.map((u): [string, "unclear"] => [u, "unclear"])];
+    for (const [t, field] of texts) {
+      const problem = groundingProblem(t, p.records, field);
+      if (problem) return withhold(p, problem);
     }
-    if (!related.length) return deterministicItem(p); // says something relates but cites nothing valid
-    return {
-      requirementId: p.requirement.id,
-      kind: "ai" as const,
-      asks: it.asks,
-      related: related.slice(0, 5),
-      unclear: it.unclear,
-      nextStep: it.nextStep,
-      breakdown: p.breakdown,
-      clarification: null,
-      stale: false,
-    };
+    const base = deterministic(p, "no_related", null);
+    const unclear = [...base.unclear, ...it.unclear.filter((u) => !base.unclear.includes(u))].slice(0, 8);
+    if (it.noRelatedEvidence) return { ...base, nextStep: it.nextStep, asks: it.asks, unclear };
+    const related: RelatedRecord[] = cited.slice(0, 5).map((r) => {
+      const e = refs.evidenceByRef.get(r)!;
+      return { evidenceId: e.id, evidenceVersion: e.version, evidenceTitle: e.title.slice(0, 300), documents: quoteRecord(e, p.requirement.originalText) };
+    });
+    return { ...base, kind: "ai" as const, asks: it.asks, related, unclear, nextStep: it.nextStep };
   });
   return { explanations, rejectedReferences: rejected };
 }
+
+export type Withheld = GroundingProblem | "unknown_reference" | "inconsistent" | "missing";

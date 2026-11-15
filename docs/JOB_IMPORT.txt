@@ -22,11 +22,13 @@ Pending: the live provider acceptance test, then release (both below; each step 
 
 ### Checks actually run for the explanation layer (isolated local stack, ALL providers stubbed)
 
-- Full vitest suite including DB tests: 563/563 (41 files); typecheck, lint and production build clean.
-- `scripts/e2e-import.mts explain`: **34/34** (fictional technicians; supported, partial, assisted, done-by-others,
-  not-done, summary-only, unrelated, absent evidence; eligibility lines; rejected reference; model failure; stale run;
-  another technician's run; checked results, links, verification statuses and counts byte-identical before/after;
-  report section prints without links). Flag-on 57/57 with explanations on, flag-off 17/17, `e2e-local.mjs` 95/95.
+- Full vitest suite including DB tests: 614/614 (42 files); typecheck, lint and production build clean.
+- `scripts/e2e-import.mts explain`: **45/45** (fictional technicians; supported, partial, assisted, done-by-others,
+  not-done, summary-only, unrelated, absent evidence; eligibility lines; unknown reference withholds the whole line;
+  fulfilment claim, unbacked worker claim and contradiction withheld; model failure; 3 parallel requests and a triple
+  click → one generation; out-of-date display after a record change; stale and foreign runs refused; checked
+  results, links, verification statuses and counts byte-identical before/after; report section prints without
+  links). Flag-on 57/57 with explanations on, flag-off 17/17, `e2e-local.mjs` 95/95.
 - No live Gemini, Supermemory or TinyFish call was made. The explanations migration is applied LOCALLY only.
 
 ### Checks actually run (on 552ef01, isolated local stack, all providers stubbed)
@@ -109,23 +111,19 @@ Isolated local stack (no hosted data, no providers):
 
 ### Pending approvals and exact next actions
 
-1. Done: "Your next steps" (552ef01). Keep PR #11 unmerged.
-2. **Needs approval:** user supplies one public HVAC listing URL and adds `TINYFISH_API_KEY` to `.env.local` themselves.
-3. **Needs approval:** back up hosted DB to `~/qualitrail-backups/<ts>-pre-job-import/` (outside Git), apply
-   `20261118100000_job_import.sql` in one transaction, verify schema. Rollback while unused:
-   `scripts/sql/rollback-job-import-if-empty.sql`.
-4. **Needs approval:** live test from a local app against hosted dev as the test technician (import flag on locally
-   only, email/sign-off/review off). Caps: TinyFish 1 fetch (max 2); Gemini ≤3 attempts per draft, ≤6 total;
-   Supermemory searches only, ≤2 match runs, no writes. Expected writes: 1 import row, 1 job, N requirements,
-   1–2 match runs, rate-limit rows; no emails, no evidence changes, no cleanup. Verify wording, priorities, honest
-   `cannot_assess` lines (do not broaden the catalog), evidence links, "Your next steps" against the real run
-   (do not click Request/Send in any panel), printable report.
-5. **Needs approval (new use of Gemini with worker evidence):** apply `20261119100000_match_run_explanations.sql`
-   to the hosted DB (backup first), then one live explanation test as the test technician with
-   `AI_EXPLANATIONS_ENABLED=true` locally only. Caps: 1 batched Gemini request per run (≤3 model attempts), ≤2 runs;
-   Supermemory ≤ one search per explained line (≤20 per run), no writes. Expected writes: 1–2
-   `match_run_explanations` rows and rate-limit rows only.
-6. **Each needs separate approval:** Vercel variables with the flags off → merge PR #11 → deploy → enable each flag.
+1. Done: "Your next steps" (552ef01), explanation layer and its safeguards. Keep PR #11 unmerged.
+2. Done: the user added `TINYFISH_API_KEY` to `.env.local`. Listing: https://jobs.lever.co/sila/46df3971-a656-49e9-bacc-8bc4dbaffae9
+3. **ONE consolidated approval (pending)** covers, in order, on project `ighnwgkqvajfkhmopttg` (shared by dev and
+   production; production code and Vercel settings stay unchanged):
+   a. backup (`supabase db dump`: roles, schema, data) to `~/qualitrail-backups/<ts>-pre-import-explanations/`;
+   b. dry run: `supabase migration list --remote` and `supabase db push --dry-run` must show exactly
+      `20261118100000` and `20261119100000` pending; both replayed on a disposable local Postgres restored from the
+      fresh schema dump, with `tests/db/job-import.test.ts` and `tests/db/explanations.test.ts`;
+   c. apply both migrations (`supabase db push`; never `config push`), verify tables, RLS, grants, function privileges;
+   d. bounded live import test, then e. bounded live explanation test, as "Inbox A Test (fictional)", from a local
+      app with flags on in the local shell only. Call caps (including retries and matching searches) are in the
+      approval request; stop and report on any cap, unexpected write, or more than 20 drafted lines.
+4. **Each needs separate approval:** Vercel variables with the flags off → merge PR #11 → deploy → enable each flag.
 
 A technician pastes a public job-listing link (or the listing text). QualiTrail retrieves that one page, drafts the
 requirement lines, lets the technician review them, then compares them with the technician's own saved records
@@ -149,35 +147,64 @@ A separate, clearly labelled layer, "Related evidence — AI-assisted explanatio
 When it runs: only when the technician presses "Explain related evidence" on a CURRENT match run. One generation per
 run (repeats return the saved one; at most 3 attempts per run; daily limit per technician; 30 requests/hour).
 
-What is sent to Gemini (one batched request per run, at most 3 model attempts, 90 s budget):
+What is sent to Gemini (one batched request per run, at most 3 model attempts, 90 s budget). This is the MINIMUM:
 - the employer's wording of each `cannot_assess` line that is NOT an eligibility condition, with opaque refs (Q1…);
-- for each such line, up to 5 related records of THIS technician, with opaque refs (E1…): type, title, date (year
-  and month), issuer, skills, work performed, equipment and a status label ("self-reported", "document supplied by
-  the technician", …), each list clipped, with emails, phone numbers and street addresses removed;
+- for each such line, up to 5 related records of THIS technician, with opaque refs (E1…), and ONLY these fields:
+  `type`, `title`, `skills`, `workPerformed` (the record's activities), `equipment`, and a status label
+  ("self-reported", "document supplied by the technician", …). Lists are clipped (12/12/8 items, 120–200 chars).
 - a deterministic task check computed from the records' own wording (documented / assisted / done by others /
   not done / summary only / not established).
 
-Never sent: summaries, original files or their text, credential numbers, signatures, customer names or contact
+**Redacted, not anonymous.** Emails, phone numbers and street addresses are removed by pattern. Free text that the
+technician typed into a title, skill, activity or equipment entry (a customer's surname, a site or business name,
+a town) is sent as written. The offer shown before anything is sent says so.
+
+Never sent: summaries, original files or their text, issuers, dates, credential numbers, signatures, customer contact
 details, sign-off or supervisor comments, record or worker ids, versions, the technician's name or profile.
 Never sent at all: duration, driving/licence, physical, work authorisation, background check, education and schedule
 lines. They get a fixed "what would need clarifying" text and are never inferred from records.
 
-Supermemory: one search per explained line, using the employer's line text, inside the technician's own namespace
-(the same search matching already uses). Hits are kept only if they are the technician's current, indexed records.
+Supermemory: one search per `cannot_assess` line (eligibility lines included, to find task records shown as context
+only), using the employer's line text, inside the technician's own namespace (the search matching already uses).
+Hits are kept only if they are the technician's current, indexed records.
 
-Treated as untrusted: listing and record text are passed as data; the prompt tells the model to ignore instructions
-inside them. The response is validated:
-- every cited ref must be one supplied FOR THAT LINE; unknown, cross-line and duplicate refs are removed and counted
-  (the page says how many were removed);
-- an item citing nothing valid, or claiming the technician meets/qualifies/is eligible/is verified, is discarded and
-  replaced with the deterministic content;
-- "no related evidence" is said plainly; nothing positive is written without a valid supplied record.
+### What the model may contribute, and how its output is checked
+
+Input text is treated as untrusted data; the prompt says to ignore instructions inside it. The model may only:
+(a) restate what the line asks, (b) CHOOSE which supplied records relate, by ref, (c) list what is unclear,
+(d) suggest one next step. It never describes a record: each cited record is shown with QUOTES of its own
+title/skills/work performed/equipment lines (`quoteRecord`, never the summary).
+
+The WHOLE AI item for a line is withheld (the deterministic content is shown, with the reason) when:
+- it cites any record not supplied for that line (unknown or another line's): one bad reference discards the
+  line's AI text, not just the reference; the count of rejected references is shown;
+- it says nothing relates but cites records, or cites none while saying records relate;
+- any clause of its text (grounding.ts):
+  - contains a ref (E1/Q1);
+  - makes a positive statement about the technician or their records ("you have…", "your records show…") that
+    is not a hedge/negation or an instruction — positive facts come only from the task check and quotes;
+  - judges ability in either direction ("experienced", "lacks", "not qualified");
+  - uses fulfilment language ("satisfies", "meets", "qualifies", "sufficient", "demonstrates", "confirms",
+    "matches", "covers", "fit", …) without a negation/hedge before it (or "ask … to …");
+  - mentions a task whose status in the supplied records is not "documented" without stating the limitation
+    (assisted / someone else / not / summary / unclear) in the same clause;
+  - in "what the line asks": mentions the technician or records at all, or says anything "was done".
+The task check's limitations are always listed first under "Not established or unclear", so the AI cannot drop them.
+These rules are deliberately strict; a false rejection only loses AI wording, never checked results.
+
+### Caching and currency
+
+One explanation per match run (unique row; `explanation_claim` returns `existing`/`busy`, so repeated or parallel
+requests never start a second generation; the button also ignores clicks while a request is in flight). A run is
+pinned to one evidence revision, and each cited record's version is stored. When read, the explanation is CURRENT
+only if its run is still current and every cited record is unchanged; otherwise every line is marked "Out of date"
+with a banner, it is kept for reference only, and the stale run cannot be explained again (run matching first).
 
 What it can never do: change any assessment, verification status, evidence link, "Evidence found" total, fit summary
 count or "Your next steps". It is stored in its own server-only table `match_run_explanations` (no browser access;
-writes only through `explanation_claim/save/fail`, service role only). Items are marked out of date when a cited
-record changes. If the model fails, the deterministic task check, eligibility and no-related texts are shown with a
-notice. AI-written parts are labelled; record links show on screen only, not in print.
+writes only through `explanation_claim/save/fail`, service role only). If the model fails, the deterministic task
+check, eligibility and no-related texts are shown with a notice. AI-written parts are labelled; record links show
+on screen only, not in print.
 
 Retention: kept with the match run (deleted with it). Migration `20261119100000_match_run_explanations.sql` is
 additive; rollback while empty: `scripts/sql/rollback-explanations-if-empty.sql`.

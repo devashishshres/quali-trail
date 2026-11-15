@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { MatchRun, Opportunity, RequirementExplanation, RunExplanations } from "@/lib/types";
 import { explainMatch, toApiError } from "@/lib/client/api";
 import type { ApiRequestError } from "@/lib/client/errors";
@@ -8,7 +8,17 @@ import { Icon } from "../ui/icons";
 
 export const RELATED_TITLE = "Related evidence — AI-assisted explanation";
 export const RELATED_NOTE =
-  "Not a checked match. It does not change the assessment above, any verification status or the counts. AI-written parts can be wrong; the record titles and the task check come from your records' own wording.";
+  "Not a checked match. It does not change the assessment above, any verification status or the counts. AI-written parts are labelled and can be wrong; the task check and the quotes come from your records' own wording.";
+
+const WITHHELD: Record<NonNullable<RequirementExplanation["withheld"]>, string> = {
+  unknown_reference: "it cited a record that wasn't supplied for this line",
+  inconsistent: "its record choices didn't agree with its own answer",
+  missing: "the AI gave no usable answer for this line",
+  reference_in_text: "its wording referred to records by internal labels",
+  worker_claim: "it made a statement about you or your ability that your records' wording doesn't back",
+  fulfilment_claim: "it said or implied that a requirement is met",
+  contradicts_records: "it described work differently from what your records say (for example as done when the record says assisted)",
+};
 
 const KIND_NOTE: Record<RequirementExplanation["kind"], string | null> = {
   ai: null,
@@ -27,7 +37,8 @@ export function RelatedEvidencePanel({ item, heading = true }: { item: Requireme
           <p className="mt-1 text-xs text-slate">{RELATED_NOTE}</p>
         </>
       )}
-      {item.stale && <p className="mt-2 font-semibold text-orange-ink">A cited record changed after this was written. Run matching again for a current explanation.</p>}
+      {item.stale && <p className="mt-2 font-semibold text-orange-ink" data-stale>Out of date: your records changed after this was written. Run matching again for a current explanation.</p>}
+      {item.withheld && <p className="mt-2" data-withheld={item.withheld}>The AI text for this line was withheld because {WITHHELD[item.withheld]}.</p>}
       {KIND_NOTE[item.kind] && <p className="mt-2">{KIND_NOTE[item.kind]}</p>}
       {item.asks && (
         <p className="mt-2">
@@ -49,7 +60,7 @@ export function RelatedEvidencePanel({ item, heading = true }: { item: Requireme
       )}
       {item.related.length > 0 && (
         <div className="mt-2">
-          <p className="font-semibold">Records that may relate{item.kind === "ai" ? " (AI-written descriptions)" : ""}</p>
+          <p className="font-semibold">{item.kind === "ai" ? "Records the AI linked to this line (quoted from each record)" : "Records that may relate (quoted from each record)"}</p>
           <ul className="mt-1 space-y-1" data-related-records>
             {item.related.map((r) => (
               <li key={r.evidenceId}>
@@ -90,6 +101,11 @@ export function RelatedEvidenceSection({ opportunity, explanations }: { opportun
     <section className="break-inside-avoid" data-section="related-evidence" aria-labelledby="related-title">
       <h3 id="related-title" className="font-display text-xl font-semibold">{RELATED_TITLE}</h3>
       <p className="mt-1 max-w-prose text-sm text-slate">{RELATED_NOTE}</p>
+      {!explanations.current && (
+        <p className="mt-2 text-sm font-semibold text-orange-ink" role="status" data-out-of-date>
+          Out of date: your records changed after this explanation was written. It is kept for reference only. Run matching again, then ask for a new explanation.
+        </p>
+      )}
       {explanations.aiStatus === "failed" && (
         <p className="mt-2 text-sm font-semibold text-orange-ink" role="status">
           The AI step failed, so only what your records&apos; wording shows is listed. Your checked results and next steps are unchanged.
@@ -119,10 +135,13 @@ export function RelatedEvidenceSection({ opportunity, explanations }: { opportun
 export function ExplainBlock({ run, opportunity, explanations, enabled, onReady }: { run: MatchRun; opportunity: Opportunity; explanations: RunExplanations | null | undefined; enabled: boolean; onReady: (x: RunExplanations) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiRequestError | null>(null);
+  const inFlight = useRef(false); // a second click before the button re-renders sends nothing
   const lines = run.results.filter((r) => r.assessment === "cannot_assess").length;
   if (explanations?.status === "completed") return <RelatedEvidenceSection opportunity={opportunity} explanations={explanations} />;
   if (!enabled || !lines || run.status !== "completed") return null;
   async function go() {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -130,6 +149,7 @@ export function ExplainBlock({ run, opportunity, explanations, enabled, onReady 
     } catch (e) {
       setError(toApiError(e));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
@@ -137,9 +157,11 @@ export function ExplainBlock({ run, opportunity, explanations, enabled, onReady 
     <section className="rounded-md border border-dashed border-line p-4 text-sm" data-section="explain-offer">
       <p className="font-semibold">{RELATED_TITLE}</p>
       <p className="mt-1 max-w-prose text-slate">
-        {lines} line{lines > 1 ? "s" : ""} couldn&apos;t be assessed automatically. QualiTrail can look for related records and ask an AI model to
-        explain how they relate. It sends only those requirement lines and the related records&apos; titles, dates, skills, work performed and
-        equipment: never your summary, files, signatures, customer details or comments. It does not change your checked results.
+        {lines} line{lines > 1 ? "s" : ""} couldn&apos;t be assessed automatically. QualiTrail can look for related records and ask an AI model
+        (Google Gemini) to explain how they relate. It sends those requirement lines and, for related records only, their type, title, skills,
+        work performed, equipment and status. Emails, phone numbers and street addresses are removed, but this is redacted, not anonymous:
+        names or places you typed into those fields are sent as written. It never sends your summary, files, signatures, customer details,
+        comments or profile. It does not change your checked results.
       </p>
       <button className="btn btn-secondary mt-3" onClick={go} disabled={busy}>
         <Icon name="star" className="size-4" /> {busy ? "Preparing explanations…" : "Explain related evidence"}

@@ -135,7 +135,7 @@ export async function readRunResponse(user: SupabaseClient, workerId: string, ru
   if (!run) return null;
   const [prev, evidence] = await Promise.all([previousRun(user, workerId, run, run.createdAt), loadWorkerEvidence(user, workerId)]);
   // Separate, server-only layer; absent until generated (or before its migration is applied).
-  const explanations = await readExplanations(createAdminClient(), workerId, run.id, evidence);
+  const explanations = await readExplanations(createAdminClient(), workerId, run.id, evidence, run.status === "completed");
   return MatchRunResponse.parse({
     matchRun: run,
     previousRunId: prev?.id ?? null,

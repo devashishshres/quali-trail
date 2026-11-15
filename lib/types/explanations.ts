@@ -43,7 +43,7 @@ export const RelatedRecord = z.object({
   /** The record version the explanation was written from. */
   evidenceVersion: z.number().int().positive(),
   evidenceTitle: Text(300),
-  /** AI-written: what this record actually documents that relates to the requirement. */
+  /** Quoted from the record's own title, skills, work performed or equipment (never AI-written, never the summary). */
   documents: Text(500),
 });
 export type RelatedRecord = z.infer<typeof RelatedRecord>;
@@ -72,6 +72,11 @@ export const RequirementExplanation = z.object({
   clarification: Text(800).nullable(),
   /** Set at read time when a cited record has changed since the explanation was written. */
   stale: z.boolean().default(false),
+  /** Why the AI text for this line was withheld (deterministic content shown instead); null when not withheld. */
+  withheld: z
+    .enum(["unknown_reference", "inconsistent", "missing", "reference_in_text", "worker_claim", "fulfilment_claim", "contradicts_records"])
+    .nullable()
+    .default(null),
 });
 export type RequirementExplanation = z.infer<typeof RequirementExplanation>;
 
@@ -83,6 +88,8 @@ export const RunExplanations = z.object({
   /** References the AI gave that did not match a supplied record, and were therefore removed. */
   rejectedReferences: z.number().int().nonnegative(),
   generatedAt: z.string(),
+  /** False when the run is no longer current (records changed): kept for reference, never shown as current. */
+  current: z.boolean().default(true),
   items: z.array(RequirementExplanation).max(60),
 });
 export type RunExplanations = z.infer<typeof RunExplanations>;

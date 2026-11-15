@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Evidence, Requirement } from "@/lib/types";
 import { RequirementExplanation } from "@/lib/types/explanations";
 import { analyzeRequirement } from "@/lib/server/opportunities/requirement-rules";
-import { buildModelInput, claimsUpgrade, plan, redact, stubSimilarity, validateModelItems, type ModelItem } from "@/lib/server/explanations/analysis";
+import { buildModelInput, plan, redact, stubSimilarity, validateModelItems, type ModelItem } from "@/lib/server/explanations/analysis";
 
 let n = 0;
 function rec(title: string, activities: string[], over: Partial<Evidence> & { summary?: string } = {}): Evidence {
@@ -86,6 +86,10 @@ describe("minimal, redacted model input", () => {
   it("never sends summaries, credential numbers, ids, versions or worker details", () => {
     expect(sent).not.toMatch(/private summary|SECRET-CRED|credential|summary|e0000000|a0000000|version|workerId|Jane/i);
   });
+  it("sends only the minimum record fields: type, title, skills, work performed, equipment, status", () => {
+    expect(Object.keys(input.records[0]).sort()).toEqual(["equipment", "ref", "skills", "status", "title", "type", "workPerformed"]);
+    expect(sent).not.toMatch(/Fictional Air Co|2025-03|issuer|date/);
+  });
   it("redacts emails, phone numbers and street addresses", () => {
     expect(sent).not.toMatch(/480-555-0199|42 Elm Street|bob@example\.com/);
     expect(redact("Call (480) 555-0199 or x@y.co at 7 Main St")).toBe("Call [phone removed] or [email removed] at [address removed]");
@@ -101,44 +105,74 @@ describe("validating model output", () => {
   const a = plan(req("Proficiency with brazing and pressure testing"), [cand(brazing)]);
   const b = plan(req("Experience with ductwork or line sets"), [cand(rec("Duct job", ["Installed ductwork"]))]);
   const { refs } = buildModelInput([a, b]); // a: Q1 → E1 ; b: Q2 → E2
-  const ok = (over: Partial<ModelItem> = {}): ModelItem => ({ ref: "Q1", asks: "Brazing and pressure testing work.", noRelatedEvidence: false, related: [{ evidenceRef: "E1", documents: "Lists brazing a line set." }], unclear: ["Pressure testing is not stated."], nextStep: "Add pressure testing to the record if you did it.", ...over });
+  const ok = (over: Partial<ModelItem> = {}): ModelItem => ({ ref: "Q1", asks: "The employer wants brazing and pressure testing work.", noRelatedEvidence: false, related: ["E1"], unclear: ["Pressure testing is not stated"], nextStep: "Add pressure testing to the record if you did it.", ...over });
   const run = (items: ModelItem[]) => validateModelItems(items, refs);
+  const first = (items: ModelItem[]) => run(items).explanations.find((x) => x.requirementId === a.requirement.id)!;
 
-  it("accepts supplied references and keeps the deterministic breakdown alongside", () => {
+  it("accepts supplied references; record descriptions are QUOTED from the record, not AI-written", () => {
     const { explanations, rejectedReferences } = run([ok()]);
     expect(rejectedReferences).toBe(0);
-    expect(explanations[0]).toMatchObject({ kind: "ai", related: [{ evidenceId: brazing.id, evidenceVersion: 2, evidenceTitle: brazing.title }] });
+    expect(explanations[0]).toMatchObject({ kind: "ai", withheld: null, related: [{ evidenceId: brazing.id, evidenceVersion: 2, evidenceTitle: brazing.title, documents: 'Work performed: "Brazed line set" (self-reported).' }] });
     expect(explanations[0].breakdown!.parts.map((p) => p.status)).toEqual(["documented", "not_found"]);
     expect(explanations.every((x) => RequirementExplanation.safeParse(x).success)).toBe(true);
   });
 
-  it("rejects unknown, cross-requirement and duplicate references and counts them", () => {
-    const { explanations, rejectedReferences } = run([ok({ related: [{ evidenceRef: "E1", documents: "ok" }, { evidenceRef: "E99", documents: "invented" }, { evidenceRef: "E2", documents: "belongs to Q2" }, { evidenceRef: "E1", documents: "dup" }] })]);
-    expect(rejectedReferences).toBe(3);
-    expect(explanations[0].related.map((x) => x.evidenceId)).toEqual([brazing.id]);
+  it("the task check's limitations are always listed, whatever the AI wrote under unclear", () => {
+    expect(first([ok({ unclear: [] })]).unclear).toEqual(["pressure testing: not stated in any related record"]);
   });
 
-  it("an item citing nothing valid falls back to deterministic content", () => {
-    const { explanations } = run([ok({ related: [{ evidenceRef: "E99", documents: "invented" }] })]);
-    expect(explanations[0].kind).toBe("ai_unavailable");
-    expect(explanations[0].asks).toBeNull();
+  it.each([
+    ["an unknown record", ["E1", "E99"]],
+    ["a record supplied for ANOTHER line", ["E1", "E2"]],
+  ])("citing %s withholds the WHOLE explanation, not just the reference", (_n, related) => {
+    const { explanations, rejectedReferences } = run([ok({ related })]);
+    expect(rejectedReferences).toBe(1);
+    expect(explanations[0]).toMatchObject({ kind: "ai_unavailable", withheld: "unknown_reference", asks: null, related: [] });
+    expect(explanations[0].nextStep).not.toMatch(/pressure testing to the record/); // the AI's text is gone too
     expect(explanations[0].breakdown).not.toBeNull();
   });
 
-  it.each(["You meet this requirement.", "The technician is qualified for this.", "This is a verified record.", "You are eligible.", "This proves the skill."])("rejects upgrade claim: %s", (claim) => {
-    expect(run([ok({ asks: claim })]).explanations[0].kind).toBe("ai_unavailable");
-    expect(run([ok({ related: [{ evidenceRef: "E1", documents: claim }] })]).explanations[0].kind).toBe("ai_unavailable");
+  it("a duplicate of a valid reference is simply merged", () => {
+    expect(first([ok({ related: ["E1", "E1"] })]).related).toHaveLength(1);
   });
 
-  it("allows saying something is NOT verified", () => {
-    expect(claimsUpgrade("This record is self-reported and has not been independently verified.")).toBe(false);
-    expect(claimsUpgrade("It is unverified.")).toBe(false);
+  it.each([
+    ["You satisfy this requirement.", "fulfilment_claim"],
+    ["You meet it.", "fulfilment_claim"],
+    ["This requirement is satisfied by the line set job.", "fulfilment_claim"],
+    ["Your records show you can do this work.", "worker_claim"],
+    ["You have brazed and pressure tested many systems.", "worker_claim"],
+    ["You are an experienced installer.", "worker_claim"],
+    ["You are not experienced with pressure testing.", "worker_claim"], // negative ability judgement
+    ["Upload a document, since you are clearly qualified.", "fulfilment_claim"],
+    ["Pressure testing was performed on the job.", "contradicts_records"],
+    ["Add E1 to your profile.", "reference_in_text"],
+  ])("ungrounded next step %j withholds the explanation (%s)", (nextStep, why) => {
+    expect(first([ok({ nextStep })])).toMatchObject({ kind: "ai_unavailable", withheld: why });
   });
 
-  it("noRelatedEvidence → no_related; missing or unknown items → deterministic", () => {
-    const { explanations } = run([ok({ ref: "Q2", noRelatedEvidence: true, related: [], nextStep: "Ask the employer." }), ok({ ref: "Q7" })]);
+  it("the same checks apply to every unclear item and to what the line asks", () => {
+    expect(first([ok({ unclear: ["You did the pressure testing"] })]).withheld).toBe("worker_claim");
+    expect(first([ok({ asks: "It asks for brazing, which you have." })]).withheld).toBe("worker_claim");
+    expect(first([ok({ asks: "Brazing was done on the line set job." })]).withheld).toBe("contradicts_records");
+  });
+
+  it("allows hedged, instructional and negative wording", () => {
+    for (const nextStep of [
+      "Ask the employer whether brazing alone counts.",
+      "Ask the employer to confirm what they accept.",
+      "If you did pressure testing, add it to the record's work performed.",
+      "Upload a document you already hold, or ask the employer what they accept.",
+    ]) expect(first([ok({ nextStep })]).withheld, nextStep).toBeNull();
+    expect(first([ok({ unclear: ["It is unclear whether the records show pressure testing", "Pressure testing is not verified"] })]).withheld).toBeNull();
+  });
+
+  it("noRelatedEvidence → no_related; contradictory or missing items → deterministic", () => {
+    const { explanations } = run([ok({ ref: "Q2", noRelatedEvidence: true, related: [], nextStep: "Ask the employer what they accept." }), ok({ ref: "Q7" })]);
     expect(explanations.find((x) => x.requirementId === b.requirement.id)!.kind).toBe("no_related");
-    expect(explanations.find((x) => x.requirementId === a.requirement.id)!.kind).toBe("ai_unavailable");
+    expect(explanations.find((x) => x.requirementId === a.requirement.id)!).toMatchObject({ kind: "ai_unavailable", withheld: "missing" });
+    expect(first([ok({ noRelatedEvidence: true })]).withheld).toBe("inconsistent");
+    expect(first([ok({ related: [] })]).withheld).toBe("inconsistent");
     expect(run(null as unknown as ModelItem[]).explanations.every((x) => x.kind === "ai_unavailable")).toBe(true);
   });
 });

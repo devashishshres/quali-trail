@@ -25,7 +25,7 @@ export interface ExplainPorts {
   claim(runId: string): Promise<ClaimResult>;
   search(query: string): Promise<MemoryHit[]>;
   propose(input: ModelInput, budgetMs: number): Promise<{ items: ModelItem[] | null; model: string | null }>;
-  save(runId: string, data: Omit<RunExplanations, "runId" | "status" | "generatedAt">, model: string | null): Promise<RunExplanations>;
+  save(runId: string, data: Omit<RunExplanations, "runId" | "status" | "generatedAt" | "current">, model: string | null): Promise<RunExplanations>;
   fail(runId: string, code: string): Promise<void>;
   now(): number;
 }

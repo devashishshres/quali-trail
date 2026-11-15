@@ -283,7 +283,7 @@ if (PHASE === "explain") {
     await p.waitForSelector("[data-section=explain-offer]");
     const fitBefore = await fitText(p);
     const offer = await p.$eval("[data-section=explain-offer]", (el) => (el as HTMLElement).innerText);
-    check("offer states what is sent and what never is", /6 lines couldn.t be assessed/.test(offer) && /never your summary, files, signatures, customer details or comments/.test(offer) && /does not change your checked results/.test(offer));
+    check("offer states what is sent and what never is", /6 lines couldn.t be assessed/.test(offer) && /redacted, not anonymous/.test(offer) && /never sends your summary, files, signatures, customer details, comments or profile/.test(offer) && /does not change your checked results/.test(offer));
     check("nothing generated before the technician asks", (await stored(runA.runId)) === null);
     await clickText(p, "Explain related evidence");
     await p.waitForSelector("[data-section=related-evidence]", { timeout: 60000 });
@@ -297,6 +297,8 @@ if (PHASE === "explain") {
     check("partial support: only brazing documented", /From your records' wording: Brazing documented; /.test(tasks));
     check("assisted, done by others, not done and summary-only are stated as such", /evacuation: assisted or observed only/.test(tasks) && /startup: done by someone else/.test(tasks) && /pressure testing: the record says it was not done/.test(tasks) && /refrigerant charging: mentioned only in a record's summary/.test(tasks), tasks.split("\n").find((l) => l.includes("wording")));
     check("AI-written parts are labelled", /What this asks for \(AI-written\)/.test(tasks) && /Suggested next step \(AI-written\)/.test(tasks));
+    check("record descriptions are quoted from the record, not AI-written", /Records the AI linked to this line \(quoted from each record\)/.test(tasks) && tasks.includes('Work performed: "Brazed copper line set" (self-reported).') && !/AI-written descriptions/.test(tasks));
+    check("the task check's limitations are listed under 'Not established or unclear'", ["evacuation: assisted or observed only", "startup: done by someone else", "pressure testing: the record says it was not done", "refrigerant charging: mentioned only in a record's summary"].every((x) => (tasks.split("Not established or unclear")[1] ?? "").includes(x)));
     check("alternatives (ductwork OR line sets) stated as such", /The line accepts any one of these\. Line sets documented; ductwork not established\./.test(pa[5]?.text ?? ""));
     const elig = pa.filter((x) => x.kind === "eligibility");
     check("eligibility lines: clarification only, no AI-written part, nothing inferred", elig.length === 3 && elig.every((x) => /What would need clarifying/.test(x.text) && !/AI-written/.test(x.text) && !POSITIVE.test(x.text)), elig.map((x) => x.text.slice(0, 80)).join(" | "));
@@ -334,15 +336,17 @@ if (PHASE === "explain") {
     check("report: section prints, on-screen record links left out", pv.shown && pv.linksHidden, JSON.stringify(pv));
     check("report: still printable", await printable(p));
 
-    // B. A model reference to a record that was never supplied is rejected and counted.
+    // B. A model reference to a record that was never supplied withholds that WHOLE explanation.
     const jobB = await importJob(p, "Fictional Service Tech (stub:bad-ref)");
     const runB = await evaluateAndSave(workerId, jobB);
     const xb = await api(p, `/api/matches/${runB.runId}/explanations`, "POST");
-    const bItems = (xb.j?.explanations?.items ?? []) as { kind: string; related: { evidenceId: string }[] }[];
-    check("bad reference rejected and counted; only supplied records kept", xb.s === 200 && xb.j.explanations.rejectedReferences === 1 && bItems.flatMap((i) => i.related.map((r) => r.evidenceId)).every((id) => own.has(id)), JSON.stringify({ s: xb.s, r: xb.j?.explanations?.rejectedReferences }));
+    const bItems = (xb.j?.explanations?.items ?? []) as { kind: string; withheld: string | null; asks: string | null; related: { evidenceId: string }[] }[];
+    check("unknown reference: counted, and the whole AI explanation for that line withheld", xb.s === 200 && xb.j.explanations.rejectedReferences === 1 && bItems[0]?.kind === "ai_unavailable" && bItems[0]?.withheld === "unknown_reference" && bItems[0]?.asks === null && bItems[0]?.related.length === 0, JSON.stringify({ s: xb.s, r: xb.j?.explanations?.rejectedReferences, k: bItems[0]?.kind, w: bItems[0]?.withheld }));
+    check("unknown reference: the other AI line is unaffected", bItems[5]?.kind === "ai" && bItems.flatMap((i) => i.related.map((r) => r.evidenceId)).every((id) => own.has(id)));
     await p.goto(`${APP}/opportunities?job=${jobB}`, { waitUntil: "networkidle0" });
     await p.waitForSelector("[data-section=related-evidence]");
-    check("page says one AI reference was removed", (await text(p)).includes("1 reference the AI gave did not match a record you supplied and was removed"));
+    const tb = await text(p);
+    check("page says the reference was removed and why the line's AI text was withheld", tb.includes("1 reference the AI gave did not match a record you supplied and was removed") && tb.includes("The AI text for this line was withheld because it cited a record that wasn't supplied for this line"));
 
     // C. The model failing keeps the deterministic content; checked results are untouched.
     const jobC = await importJob(p, "Fictional Installer (stub:fail)");
@@ -355,6 +359,46 @@ if (PHASE === "explain") {
     const pc = await panels(p);
     check("model failure: banner, deterministic breakdown kept, eligibility and no-related unchanged", (await text(p)).includes("The AI step failed") && JSON.stringify(pc.map((x) => x.kind)) === JSON.stringify(["ai_unavailable", "eligibility", "eligibility", "no_related", "eligibility", "ai_unavailable"]) && /Brazing/.test(pc[0]?.text ?? "") && !/AI-written/.test(pc.map((x) => x.text).join(" ")), JSON.stringify(pc.map((x) => x.kind)));
     check("model failure: checked results unchanged", (await snapshot(workerId, runC.runId)) === beforeC && (await stored(runC.runId))?.ai_status === "failed");
+
+    // C2. Ungrounded or contradicting AI text is withheld as a whole (stub hooks write it on the first line).
+    for (const [hook, why] of [["stub:claim", "fulfilment_claim"], ["stub:soft-claim", "worker_claim"], ["stub:contradict", "contradicts_records"]] as const) {
+      const job = await importJob(p, `Fictional Installer (${hook})`);
+      const r = await evaluateAndSave(workerId, job);
+      const before2 = await snapshot(workerId, r.runId);
+      const x = await api(p, `/api/matches/${r.runId}/explanations`, "POST");
+      const it0 = x.j?.explanations?.items?.[0];
+      check(`${hook}: whole AI explanation withheld (${why}); deterministic check kept; results unchanged`, x.s === 200 && it0?.kind === "ai_unavailable" && it0?.withheld === why && it0?.asks === null && /Brazing documented/.test(it0?.breakdown?.sentence ?? "") && (await snapshot(workerId, r.runId)) === before2 && !/satisfy|can do this work|was performed/i.test(JSON.stringify(x.j?.explanations)), JSON.stringify({ s: x.s, k: it0?.kind, w: it0?.withheld }));
+    }
+
+    // C3. Repeated requests make one generation: parallel API calls, and a double click in the UI.
+    const jobP = await importJob(p, "Fictional Installer (parallel)");
+    const runP = await evaluateAndSave(workerId, jobP);
+    const par = await Promise.all([1, 2, 3].map(() => api(p, `/api/matches/${runP.runId}/explanations`, "POST")));
+    const rowP = await stored(runP.runId);
+    check("three parallel requests → one generation (one claim, one attempt); others get the saved one or 'busy'", par.some((x) => x.s === 200) && par.every((x) => x.s === 200 || x.s === 429) && rowP?.attempts === 1 && (await admin.from("match_run_explanations").select("id").eq("match_run_id", runP.runId)).data?.length === 1, par.map((x) => x.s).join(","));
+    const jobU = await importJob(p, "Fictional Installer (double click)");
+    const runU = await evaluateAndSave(workerId, jobU);
+    await p.goto(`${APP}/opportunities?job=${jobU}`, { waitUntil: "networkidle0" });
+    await p.waitForSelector("[data-section=explain-offer]");
+    let posts = 0;
+    const onPost = (r: { method(): string; url(): string }) => { if (r.method() === "POST" && r.url().includes("/explanations")) posts += 1; };
+    p.on("request", onPost);
+    await p.evaluate(() => { const b = [...document.querySelectorAll("[data-section=explain-offer] button")][0] as HTMLButtonElement; b.click(); b.click(); b.click(); });
+    await p.waitForSelector("[data-section=related-evidence]", { timeout: 60000 });
+    await sleep(500);
+    p.off("request", onPost);
+    check("a triple click in the UI sends one request and shows no error", posts === 1 && (await stored(runU.runId))?.attempts === 1 && !(await text(p)).includes("Too many requests"), `posts=${posts}`);
+
+    // E0. Records change after an explanation: it is never shown as current, and the stale run is not re-explained.
+    await admin.from("evidence").insert(record(workerId, "Record added after explaining (FICTIONAL)", ["Installed condensate line"]));
+    await p.goto(`${APP}/opportunities?job=${jobA}`, { waitUntil: "networkidle0" });
+    await p.waitForSelector("[data-section=related-evidence]");
+    const stalePanels = await p.evaluate(() => ({ banner: !!document.querySelector("[data-section=related-evidence] [data-out-of-date]"), panels: document.querySelectorAll("[data-section=related-evidence] [data-related-kind]").length, stale: document.querySelectorAll("[data-section=related-evidence] [data-stale]").length }));
+    check("stale run: explanation marked out of date on the job page, every line", stalePanels.banner && stalePanels.panels > 0 && stalePanels.stale === stalePanels.panels, JSON.stringify(stalePanels));
+    const staleRep = await openReport(p, jobA);
+    check("stale run: report section says out of date; printing stays off", staleRep.includes("Out of date: your records changed after this explanation was written") && !(await printable(p)));
+    const reStale = await api(p, `/api/matches/${runA.runId}/explanations`, "POST");
+    check("stale run: asking again is refused, no new generation", reStale.s >= 400 && (await stored(runA.runId))?.attempts === 1, String(reStale.s));
 
     // D. A technician with no records: nothing positive is generated.
     const t2 = await newTech("b");
