@@ -357,6 +357,17 @@ Nothing merged or deployed; features remain off. Do NOT run these steps again.
      no NEXT_PUBLIC_ variable holding a secret
    Password reset is NOT behind a flag: once SIGNOFF_PEPPER is set it sends Supabase Auth reset emails, and the
    link only works after step 6's redirect URLs are configured.
+   PRODUCTION AS INSPECTED 2026-11-15 (vercel CLI, names only; no values read or printed):
+   - Live domain: https://www.proofisinthepiping.work (apex redirects to www). *.vercel.app aliases are behind
+     Vercel login; qualitrail.vercel.app is NOT assigned to this project (DEPLOYMENT_NOT_FOUND).
+   - Current production deployment: qualitrail-anuvva8e0 (main c429082, 06:44 UTC). Its public bundle uses
+     ighnwgkqvajfkhmopttg. Last previews of the four PR branches are from 07:04 UTC (before vercel.json); none since.
+   - Present: NEXT_PUBLIC_SUPABASE_URL/_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY, GEMINI_*, SUPERMEMORY_*,
+     NEXT_PUBLIC_DATA_MODE, DEMO_USER_PASSWORD. Absent: SIGNOFF_PEPPER (MISSING), SIGNOFF_ENABLED,
+     SUPERVISOR_REVIEW_ENABLED, EMAIL_MODE, SIGNUP_MODE, APP_BASE_URL (all absent = off/closed, as intended).
+   - Also present, Production only: a Supabase integration's variables (SUPABASE_URL, POSTGRES_*, SUPABASE_ANON_KEY,
+     SUPABASE_SERVICE_ROLE_KEY, SUPABASE_JWT_SECRET, NEXT_PUBLIC_SUPABASE_ANON_KEY, ...) for a DIFFERENT project,
+     cjnzzfljkqzxmuppjdzh. The app reads none of them. Leave as is until its owner decides (removal needs approval).
 
 6. SUPABASE AUTH (Dashboard -> Authentication)
    - URL Configuration: Site URL https://<app>
