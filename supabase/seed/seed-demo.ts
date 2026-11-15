@@ -16,6 +16,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import { DEMO_USER_EMAIL, REQUIREMENT_SOURCE } from "./demo-data";
+import { attributionProblems } from "./attribution";
+import { absolutePathOf, alexDocumentSet, demoDocumentSet, writeDemoDocuments } from "./demo-documents";
 import { planDemoWorker } from "./synthetic-worker";
 
 // Run from the repo root (works whether the package is ESM or CJS).
@@ -36,6 +38,16 @@ async function main() {
   const plan = planDemoWorker({ slug: process.env.DEMO_WORKER_SLUG, name: process.env.DEMO_WORKER_NAME, summary: process.env.DEMO_WORKER_SUMMARY });
   if (!plan.isOriginal && !process.env.DEMO_USER_EMAIL) throw new Error("DEMO_USER_EMAIL is required with DEMO_WORKER_SLUG (it must differ from the existing demo account).");
   if (!plan.isOriginal && process.env.DEMO_USER_EMAIL === DEMO_USER_EMAIL) throw new Error("DEMO_USER_EMAIL must differ from the existing demo account.");
+
+  // Documents for THIS worker. Alex keeps his committed originals; a rehearsal worker gets its own
+  // files naming that worker, in its own directories. Nothing is written anywhere until the
+  // attribution check (names, identifiers, stored metadata vs printed text) passes.
+  const seedRoot = join(process.cwd(), "supabase", "seed");
+  const docs = plan.isOriginal ? alexDocumentSet() : demoDocumentSet({ name: plan.worker.name, slug: process.env.DEMO_WORKER_SLUG });
+  const problems = attributionProblems(plan, docs);
+  if (problems.length) throw new Error(`Attribution check failed, nothing was written:\n- ${problems.join("\n- ")}`);
+  if (!plan.isOriginal) writeDemoDocuments(seedRoot, docs);
+
   const supabase = createClient(
     requireEnv("NEXT_PUBLIC_SUPABASE_URL"),
     requireEnv("SUPABASE_SECRET_KEY"),
@@ -79,7 +91,9 @@ async function main() {
     let storagePath: string | null = null;
     let fileHash = sha256(`seed:${item.id}`);
 
-    const filePath = item.fileName ? join(FILES_DIR, item.fileName) : null;
+    const doc = item.fileName ? docs.documents.find((d) => d.fileName === item.fileName) : undefined;
+    // Alex: the committed original. Rehearsal worker: that worker's own generated file. Hashed from the actual bytes read.
+    const filePath = doc ? (plan.isOriginal ? join(FILES_DIR, doc.fileName) : absolutePathOf(seedRoot, doc)) : null;
     if (filePath && existsSync(filePath)) {
       const bytes = readFileSync(filePath);
       fileHash = sha256(bytes);
@@ -135,6 +149,9 @@ async function main() {
   );
   if (reqError) throw reqError;
 
+  const checklist = docs.documents.find((d) => d.uploadedLive)!;
+  console.log(`Documents for ${plan.worker.name}: ${plan.evidence.filter((e) => e.fileName).length} originals uploaded to private storage.`);
+  console.log(`UPLOAD THIS FILE during the demonstration: ${absolutePathOf(seedRoot, checklist)}`);
   console.log(
     `Seeded ${plan.worker.name}: ${plan.evidence.length} evidence records, 1 opportunity, ${plan.requirements.length} requirements.`,
   );

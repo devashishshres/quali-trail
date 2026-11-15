@@ -70,3 +70,6 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# Per-worker generated demo PDFs (rehearsal workers). Alex Morgan's top-level originals stay tracked.
+supabase/seed/files/*/
+supabase/seed/upload/*/
