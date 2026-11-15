@@ -10,7 +10,8 @@ export type EmailKind =
   | "supervisor_invitation"
   | "review_notification"
   | "decision_notice"
-  | "reminder";
+  | "reminder"
+  | "employer_share_invitation";
 
 export interface Rendered {
   subject: string;
@@ -97,6 +98,13 @@ export const templates = {
     render(`A ${c.who} responded to your request`, [
       { p: `A ${c.who} responded to your request about "${c.title}": ${c.decisionLabel}.` },
       { link: { href: c.link, label: "See it in QualiTrail" } },
+    ], c),
+
+  employerShareInvitation: (c: Ctx & { workerName: string; link: string; validDays: number }) =>
+    render(`${c.workerName} shared records with you`, [
+      { p: `${c.workerName} uses QualiTrail to keep records of their training and work, and chose to share read-only copies of selected confirmed work and certifications with this email address.` },
+      { link: { href: c.link, label: "View the shared records" } },
+      { small: `Sign in or create an account with this email address to open it. Signing in shows only that you control this address; it does not verify your identity or employer, or any of the records. Access ends in ${c.validDays} days, or sooner if ${c.workerName} withdraws it.` },
     ], c),
 
   reminder: (c: Ctx & { workerName: string; link: string; what: "customer" | "supervisor" }) =>

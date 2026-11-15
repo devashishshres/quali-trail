@@ -1,4 +1,5 @@
 import { STATEMENT_TEXT } from "@/lib/server/signoff/statement";
+import { CUSTOMER_SHARE_CONSENT_TEXT, employerReviewEnabled } from "@/lib/server/employer/flags";
 import { allow, clientIp, featureOn, gone, guarded, json, off, rpc, sessionHash, tokenHash, tooMany } from "@/lib/server/signoff/service";
 import type { SnapshotResponse } from "@/lib/types";
 
@@ -26,6 +27,7 @@ async function handlePOST(request: Request) {
       summary: (s.summary as string | null) ?? null,
     },
     statement: STATEMENT_TEXT,
+    ...(employerReviewEnabled() ? { shareConsent: CUSTOMER_SHARE_CONSENT_TEXT } : {}),
     response: (r.response as SnapshotResponse["response"]) ?? null,
   };
   return json(body);

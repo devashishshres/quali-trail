@@ -15,7 +15,7 @@ import { safeNext } from "@/lib/server/accounts/policy";
  */
 
 const PUBLIC = ["/sign-in", "/sign-up", "/forgot-password", "/reset-password", "/auth/", "/signoff", "/invite/"];
-const WORKER_PAGES = ["/passport", "/evidence", "/opportunities", "/reports", "/supervisors", "/jobs"];
+const WORKER_PAGES = ["/passport", "/evidence", "/opportunities", "/reports", "/supervisors", "/jobs", "/share"];
 /** Exact path or a sub-path ("/evidence", "/evidence/x"), never a longer sibling ("/evidencex"). */
 const startsWithAny = (path: string, list: string[]) =>
   list.some((p) => (p.endsWith("/") ? path.startsWith(p) : path === p || path.startsWith(`${p}/`)));
@@ -75,7 +75,8 @@ export async function proxy(request: NextRequest) {
   }
 
   // Customer and invitation pages, the email-link callback, password reset and onboarding work for anyone signed in.
-  if (startsWithAny(path, ["/signoff", "/invite/", "/auth/", "/onboarding", "/forgot-password", "/reset-password"])) return response;
+  // So do shared employer packets: each page and API call there checks the share's recipient itself.
+  if (startsWithAny(path, ["/signoff", "/invite/", "/auth/", "/onboarding", "/forgot-password", "/reset-password", "/employer"])) return response;
 
   const [w, s] = await Promise.all([
     supabase.from("workers").select("id").eq("auth_user_id", data.user.id).maybeSingle(),

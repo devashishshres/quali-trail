@@ -24,7 +24,7 @@ export const accountsApi = {
 
   // Supervisor side
   dashboard: () => call<Dashboard>("/api/supervisor/dashboard"),
-  review: (id: string) => call<{ review: SupervisorReview; statements: { observed: string; documents: string } }>(`/api/supervisor/reviews/${id}`),
+  review: (id: string) => call<{ review: SupervisorReview; statements: { observed: string; documents: string; shareConsent?: { share: string; name: string } | null } }>(`/api/supervisor/reviews/${id}`),
   reviewDocument: (id: string) => call<{ url: string }>(`/api/supervisor/reviews/${id}/document`),
   respond: (id: string, body: ReviewRespondRequest) => call<{ recorded: boolean; repeated: boolean; status: string }>(`/api/supervisor/reviews/${id}/respond`, post(body)),
   peekInvite: (t: string) => call<{ status: string; workerName: string | null; emailHint: string | null; answered?: boolean }>("/api/supervisor/invite/peek", post(), t),

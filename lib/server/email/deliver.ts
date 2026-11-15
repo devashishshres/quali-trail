@@ -12,7 +12,7 @@ export interface DeliveryRequest {
   rendered: Rendered;
   /** Same key => at most one successful send, across retries and concurrent requests. */
   idempotencyKey: string;
-  related?: { type: "signoff_request" | "supervisor_relationship" | "review_request"; id: string };
+  related?: { type: "signoff_request" | "supervisor_relationship" | "review_request" | "employer_share"; id: string };
   /** Mock outbox only: which worker the message was sent on behalf of. */
   workerId?: string;
 }
