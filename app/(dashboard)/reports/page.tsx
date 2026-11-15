@@ -2,12 +2,15 @@
 import Link from "next/link";
 import { Fragment, useState } from "react";
 import { flushSync } from "react-dom";
-import { REPORT_DISCLAIMER, type EvidenceAssessment, type EvidenceConnection, type Opportunity, type Worker } from "@/lib/types";
+import { REPORT_DISCLAIMER, type AttestationsResponse, type Evidence, type EvidenceAssessment, type EvidenceConnection, type Opportunity, type Worker } from "@/lib/types";
+import { FIXTURE_MODE } from "@/lib/client/api";
+import { call } from "@/lib/client/signoff-api";
+import { attestationTags } from "@/lib/client/attestation-labels";
 import { api } from "@/lib/client/api";
 import { useLoad } from "@/lib/client/use-load";
 import { NO_EVIDENCE_NOTE, TYPE_LABEL, formatDate, formatStamp } from "@/lib/client/labels";
 import { ErrorNotice, Loading, Notice, PageHeader } from "@/components/ui/states";
-import { AssessmentLabel, FictionalTag, VerificationTag } from "@/components/ui/status";
+import { AssessmentLabel, FictionalTag, SignoffTag, VerificationTag } from "@/components/ui/status";
 import { Icon } from "@/components/ui/icons";
 
 export default function ReportsPage() {
@@ -36,13 +39,18 @@ export default function ReportsPage() {
       {error && <ErrorNotice error={error} onRetry={() => (profile.reload(), opps.reload())} />}
       {(profile.status === "loading" || opps.status === "loading") && <Loading label="Preparing your report…" />}
       {profile.data && opps.data && !opportunity && <p className="text-slate">No opportunities yet.</p>}
-      {profile.data && opportunity && <Packet key={opportunity.id} worker={profile.data.worker} opportunity={opportunity} />}
+      {profile.data && opportunity && <Packet key={opportunity.id} worker={profile.data.worker} evidence={profile.data.evidence} opportunity={opportunity} />}
     </>
   );
 }
 
-function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportunity }) {
+function Packet({ worker, evidence, opportunity }: { worker: Worker; evidence: Evidence[]; opportunity: Opportunity }) {
   const latest = useLoad(() => api.latestMatch(opportunity.id), opportunity.id);
+  // Completed customer acknowledgments and supervisor reviews only. The summary endpoint never returns customer
+  // addresses, typed signatures or comments, so an ordinary packet cannot show them.
+  const att = useLoad(() => (FIXTURE_MODE ? Promise.resolve<AttestationsResponse>({ items: {} }) : call<AttestationsResponse>("/api/attestations")));
+  const versionOf = new Map(evidence.map((e) => [e.id, e.version]));
+  const tagsFor = (id: string) => attestationTags(att.data?.items[id], versionOf.get(id) ?? 0, true);
   const [checking, setChecking] = useState(false);
   const [checkedAt, setCheckedAt] = useState<string | null>(null);
   const [printError, setPrintError] = useState<string | null>(null);
@@ -141,7 +149,10 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
 
         {(worker.isSynthetic || opportunity.isSynthetic) && (
           <p className="mt-4 flex items-center gap-2 text-sm">
-            <FictionalTag /> The technician, employer and records in this packet are invented for a demonstration.
+            <FictionalTag />{" "}
+            {worker.isSynthetic
+              ? "The technician, employer and records in this packet are invented for a demonstration."
+              : "The job posting is a fictional sample you chose to add. Your own records are real."}
           </p>
         )}
 
@@ -224,7 +235,12 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
                             )}
                           </td>
                           <td className="py-3 pr-4 text-slate">{c ? (c.evidenceIssuer ?? "Not stated") : ""}</td>
-                          <td className="py-3">{c && <VerificationTag status={c.verificationStatus} />}</td>
+                          <td className="py-3">
+                            {c && <VerificationTag status={c.verificationStatus} />}
+                            {c && tagsFor(c.evidenceId).map((t) => (
+                              <span key={t.id} className="mt-1 block"><SignoffTag short={t.short} tone={t.tone} /></span>
+                            ))}
+                          </td>
                         </tr>
                       ))}
                     </Fragment>
@@ -282,6 +298,26 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
             ))}
           </ul>
         </section>
+
+        {sources.some((s) => tagsFor(s.evidenceId).length) && (
+          <section className="mt-8 break-inside-avoid">
+            <h3 className="font-display text-xl font-semibold">Customer acknowledgments and supervisor reviews</h3>
+            <p className="text-sm text-slate">
+              These are separate from verification and from the assessments above, and they did not change either. An acknowledgment
+              or review applies to the version of the record it was given for.
+            </p>
+            <ul className="mt-2 divide-y divide-line text-sm">
+              {sources.flatMap((s) =>
+                tagsFor(s.evidenceId).map((t) => (
+                  <li key={t.id} className="py-2">
+                    <span className="font-medium">{s.evidenceTitle}</span>
+                    <span className="block text-slate">{t.long}</span>
+                  </li>
+                )),
+              )}
+            </ul>
+          </section>
+        )}
 
         <footer className="mt-10 border-t-2 border-navy pt-4 text-sm">
           <p className="font-semibold">{REPORT_DISCLAIMER}</p>

@@ -28,7 +28,10 @@ export function signoffLabel(s: WorkerSignoff, currentVersion: number): SignoffL
   const changed = s.evidenceVersion !== currentVersion;
   if (s.status === "acknowledged") {
     if (s.deliveryMode === "mock") {
-      return { short: "Simulated acknowledgment", long: "Simulated (no real email was sent). This development test is not email verification and not a customer acknowledgment.", tone: "simulated" };
+      const long = "Simulated (no real email was sent). This development test is not email verification and not a customer acknowledgment.";
+      return changed
+        ? { short: "Changed since simulated acknowledgment", long: `${long} The record has changed since then.`, tone: "simulated" }
+        : { short: "Simulated acknowledgment", long, tone: "simulated" };
     }
     const base = `Customer acknowledged on ${formatDate(s.decidedAt?.slice(0, 10) ?? null)}. A code sent to the email address the worker provided was entered. Neither the customer's identity nor the work is independently verified.`;
     return changed

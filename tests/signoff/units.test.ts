@@ -111,6 +111,9 @@ describe("acknowledgment labels", () => {
     expect(l.long).toMatch(/Simulated \(no real email was sent\)/);
     expect(l.long).not.toMatch(/A code sent to the email address/);
     expect(l.tone).toBe("simulated");
+    const changed = signoffLabel({ ...base, deliveryMode: "mock" }, 2);
+    expect(changed.short).toBe("Changed since simulated acknowledgment");
+    expect(changed.tone).toBe("simulated");
   });
   it("flags a record that changed after it was acknowledged", () => {
     expect(signoffLabel(base, 2).short).toBe("Changed since acknowledged");

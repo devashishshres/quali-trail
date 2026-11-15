@@ -122,3 +122,29 @@ export type WorkerReview = z.infer<typeof WorkerReview>;
 
 /** shareOriginal: the worker's explicit choice to let the supervisor open the original document (default: not shared). */
 export const CreateReviewRequest = z.object({ evidenceId: z.uuid(), relationshipId: z.uuid(), shareOriginal: z.boolean().default(false) });
+
+/** POST /api/jobs — log a completed job (no supporting document). Reuses the work_record/checklist record types. */
+export const LogJobRequest = z.object({
+  type: z.enum(["work_record", "checklist"]),
+  title: z.string().trim().min(1).max(300),
+  date: z.iso.date(),
+  issuer: z.string().trim().max(300).nullable(),
+  activities: z.array(z.string().trim().min(1).max(300)).min(1, "List at least one task you did.").max(30),
+  equipment: z.array(z.string().trim().min(1).max(300)).max(30),
+  skills: z.array(z.string().trim().min(1).max(300)).max(30),
+  summary: z.string().trim().max(2000).nullable(),
+});
+export type LogJobRequest = z.infer<typeof LogJobRequest>;
+
+/** Packet-safe summary: no customer address, typed signature or free-text comment. */
+export const AttestationSummary = z.object({
+  customer: z.array(z.object({
+    id: z.string(), status: z.string(), deliveryMode: z.enum(["resend", "mock"]), evidenceVersion: z.number().int(), decidedAt: z.string().nullable(),
+  })),
+  supervisor: z.array(z.object({
+    id: z.string(), status: z.string(), evidenceVersion: z.number().int(), decidedAt: z.string().nullable(), observedTasks: z.array(z.string()),
+    reviewerName: z.string().nullable(), reviewerOrganization: z.string().nullable(), reviewerTitle: z.string().nullable(),
+  })),
+});
+export type AttestationSummary = z.infer<typeof AttestationSummary>;
+export type AttestationsResponse = { items: Record<string, AttestationSummary> };

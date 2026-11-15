@@ -1,9 +1,10 @@
 "use client";
 import { useState } from "react";
-import type { Evidence } from "@/lib/types";
+import type { AttestationSummary, Evidence } from "@/lib/types";
+import { attestationTags } from "@/lib/client/attestation-labels";
 import { api, openOriginal, toApiError } from "@/lib/client/api";
 import { TYPE_LABEL, formatDate } from "@/lib/client/labels";
-import { FictionalTag, IndexStatus, VerificationTag } from "../ui/status";
+import { FictionalTag, IndexStatus, SignoffTag, VerificationTag } from "../ui/status";
 import { Icon } from "../ui/icons";
 import { EditForm } from "./edit-form";
 import { SignoffPanel } from "./signoff-panel";
@@ -29,7 +30,7 @@ function Facts({ label, items }: { label: string; items: string[] }) {
   );
 }
 
-function EvidenceItem({ evidence: e, onChanged }: { evidence: Evidence; onChanged: (e: Evidence) => void }) {
+function EvidenceItem({ evidence: e, attestations, onChanged }: { evidence: Evidence; attestations?: AttestationSummary; onChanged: (e: Evidence) => void }) {
   const [message, setMessage] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -62,6 +63,9 @@ function EvidenceItem({ evidence: e, onChanged }: { evidence: Evidence; onChange
           </span>
           <span className="col-span-2 flex flex-wrap items-center gap-2 sm:col-span-1 sm:flex-col sm:items-end">
             <VerificationTag status={e.verificationStatus} />
+            {attestationTags(attestations, e.version).map((t) => (
+              <SignoffTag key={t.id} short={t.short} tone={t.tone} />
+            ))}
             <IndexStatus status={e.indexStatus} />
           </span>
         </summary>
@@ -117,14 +121,14 @@ function EvidenceItem({ evidence: e, onChanged }: { evidence: Evidence; onChange
   );
 }
 
-export function EvidenceList({ evidence, onChanged }: { evidence: Evidence[]; onChanged: (e: Evidence) => void }) {
+export function EvidenceList({ evidence, attestations = {}, onChanged }: { evidence: Evidence[]; attestations?: Record<string, AttestationSummary>; onChanged: (e: Evidence) => void }) {
   if (!evidence.length) {
     return <p className="py-8 text-slate">No evidence yet. Upload a certificate or describe a job above to start your record.</p>;
   }
   return (
     <ul className="divide-y divide-line">
       {evidence.map((e) => (
-        <EvidenceItem key={e.id} evidence={e} onChanged={onChanged} />
+        <EvidenceItem key={e.id} evidence={e} attestations={attestations[e.id]} onChanged={onChanged} />
       ))}
     </ul>
   );
