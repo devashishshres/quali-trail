@@ -18,7 +18,9 @@ Done (on the branch, flag off by default):
   boundary"): explains `cannot_assess` lines from the technician's own related records; never changes checked results.
   Tested with local stubs only.
 
-Pending: the live provider acceptance test, then release (both below; each step needs approval).
+Released 2026-11-15 as main `990c7aa` (PR #11) with BOTH new flags OFF in production. The first production import
+failed while drafting; see "Production release and drafting failure" below. Pending: the drafting fix (this branch),
+then a bounded production retest (each step needs approval).
 
 ### Checks actually run for the explanation layer (isolated local stack, ALL providers stubbed)
 
@@ -160,21 +162,59 @@ Isolated local stack (no hosted data, no providers):
     TEST_DATABASE_ADMIN_URL=postgres://postgres:postgres@127.0.0.1:54322/postgres npx vitest run tests/db
     npx supabase stop
 
+### Production release and drafting failure (2026-11-15)
+
+Release (approved, done): Vercel production got `TINYFISH_API_KEY` (sensitive) and `OPPORTUNITY_IMPORT_ENABLED=false`,
+`AI_EXPLANATIONS_ENABLED=false`; PR #11 merged (`990c7aa`, merge commit, no force-push).
+- Rollback target recorded: `dpl_9J1FfvwQRDerCLjbUpV3B3hfgs5Z` (commit `77629ed`). Not used: nothing regressed.
+- Deployments: `dpl_5xUzLr9dvkcv5sB3Mdo9ERUXPEb4` (flags off; smoke 7/7) → `dpl_JAPAL2RiKGDNwAqgYMD8D5ZPpE6a`
+  (import on; import FAILED) → `dpl_2H23NKn4xdrKyWRBvRSdwngcoR5L` (import off again; smoke 7/7). Explanations never on.
+- The failed import: TinyFish 1 request (listing retrieved in ~1 s), Gemini at most 3 by code (timing indicates 1),
+  Supermemory 0, email 0. Writes: 1 failed `opportunity_imports` row, 2 rate-limit rows. Demo workers unchanged.
+
+Diagnosis. CONFIRMED (code, logs, database):
+- Log of the import deployment, POST /api/imports, 14:20:09.7Z: `import drafting failed { status: 504 }`. That is the
+  only provider-related line; the deployed code logged only the final status.
+- Import row: retrieved 14:19:54.5Z, failed 14:20:09.8Z, `draft_model_busy` → drafting lasted ~15.3 s.
+- Deployed code: drafting budget ≈ 100 s − ~2.5 s retrieval − 2 s safety ≈ 95 s → up to 3 attempts planned; each
+  attempt had a fixed 15 s deadline; on a 504/timeout the loop moves to the next model at once. A second attempt
+  would therefore have run after 15 s; drafting ended ~0.3 s later, and the final status was 504. Only ONE model
+  attempt was made, so the budget did not stop the chain.
+- In this code a one-attempt chain happens only when the configured list has one distinct model:
+  `GEMINI_FALLBACK_MODELS` set to empty (documented as "disables backups") or to the primary (deduplicated).
+- Production `GEMINI_MODEL`, `GEMINI_FALLBACK_MODELS` and `GEMINI_API_KEY` are Vercel "sensitive" variables, all
+  created together at 06:42:30Z (not by this session); their values cannot be read back (API or `env pull`). Local
+  (successful) test: `GEMINI_MODEL=gemini-3.5-flash-lite`, `GEMINI_FALLBACK_MODELS=gemini-3.5-flash,gemini-3.1-flash-lite`,
+  15 s per attempt; the same listing drafted in one ~2 s call.
+HYPOTHESES (not confirmed): (a) production's fallback list is empty or equals the primary; (b) the one attempt hit
+OUR 15 s deadline (our ModelTimeoutError is reported as 504) rather than a provider 504 — the old log cannot tell
+them apart; (c) why the call was slow (model choice, provider load, region `sfo1`) is unknown.
+Not a cause: Vercel `maxDuration` (120 s), the drafting budget, TinyFish.
+
+Fix (branch `fix/import-drafting-diagnostics`):
+- Per-attempt diagnostics in the import and explanation logs: configured models, and for each attempt the model,
+  outcome (`deadline` = our deadline, `provider_timeout`, `rate_limited`, `unavailable`, `model_not_found`, `auth`,
+  `bad_request`, `other`), HTTP status and duration; never listing text, evidence, responses or keys.
+- Attempts share the caller's budget: each gets 15–30 s (budget ÷ planned attempts), so a one-model chain gets 30 s
+  instead of 15 s; never planned past the budget; at most 3 attempts as before (no extra provider calls). The SDK
+  timeout is set 1 s past ours so our deadline is always the one that fires (and is categorised).
+- Tests: `tests/imports/drafting-diagnostics.test.ts` (planning, categories, the production failure shape).
+
+Resuming the failed import (`d1531cb7…`): its retrieved text is retained (4,624 chars, expires 2026-11-22) and the
+lease allows `failed` + `draft_*` rows, so "Try again" (POST /api/imports/:id/draft) re-drafts from the stored text
+with NO TinyFish request. Needs the import flag on. Not retried.
+
 ### Pending approvals and exact next actions
 
-1. Done: "Your next steps" (552ef01), explanation layer and its safeguards. Keep PR #11 unmerged.
-2. Done: the user added `TINYFISH_API_KEY` to `.env.local`. Listing: https://jobs.lever.co/sila/46df3971-a656-49e9-bacc-8bc4dbaffae9
-3. **ONE consolidated approval (pending)** covers, in order, on project `ighnwgkqvajfkhmopttg` (shared by dev and
-   production; production code and Vercel settings stay unchanged):
-   a. backup (`supabase db dump`: roles, schema, data) to `~/qualitrail-backups/<ts>-pre-import-explanations/`;
-   b. dry run: `supabase migration list --remote` and `supabase db push --dry-run` must show exactly
-      `20261118100000` and `20261119100000` pending; both replayed on a disposable local Postgres restored from the
-      fresh schema dump, with `tests/db/job-import.test.ts` and `tests/db/explanations.test.ts`;
-   c. apply both migrations (`supabase db push`; never `config push`), verify tables, RLS, grants, function privileges;
-   d. bounded live import test, then e. bounded live explanation test, as "Inbox A Test (fictional)", from a local
-      app with flags on in the local shell only. Call caps (including retries and matching searches) are in the
-      approval request; stop and report on any cap, unexpected write, or more than 20 drafted lines.
-4. **Each needs separate approval:** Vercel variables with the flags off → merge PR #11 → deploy → enable each flag.
+Done: migrations, local and hosted-dev live tests, release of PR #11 with both flags off.
+1. Review and merge the drafting fix PR (`fix/import-drafting-diagnostics`); Vercel deploys main with flags off;
+   smoke test login, evidence, opportunities, reports.
+2. Make the production model chain explicit (approval needed): set `GEMINI_MODEL` and `GEMINI_FALLBACK_MODELS`
+   (model names are not secrets) to the tested values, or remove both to use the built-in order. Keep the key and
+   `SIGNOFF_PEPPER` unchanged.
+3. Bounded production retest (approval needed): enable import, redeploy, "Try again" on import `d1531cb7…` (no
+   TinyFish), confirm, then enable explanations, redeploy, one explanation. Read the new attempt log either way.
+   On a new-feature failure: flag off and redeploy. On a regression: roll back to the recorded deployment.
 
 A technician pastes a public job-listing link (or the listing text). QualiTrail retrieves that one page, drafts the
 requirement lines, lets the technician review them, then compares them with the technician's own saved records
