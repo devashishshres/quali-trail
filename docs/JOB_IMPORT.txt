@@ -61,7 +61,7 @@ Pending: the live provider acceptance test, then release (both below; each step 
   positives from "ability" wording in the AI's restatement of the line). UI acceptance 18/18; report printable.
 - Production code, Vercel settings and flags unchanged. PR #11 unmerged.
 
-### Accuracy fixes after the live test (local only; live retest NOT yet run)
+### Accuracy fixes after the live test
 
 Each live problem has a synthetic regression fixture in `tests/explanations/live-regressions.test.ts`:
 - "Verified refrigerant charge…" counted as charging → now `checked_only`, stated as a limitation.
@@ -75,6 +75,25 @@ Each live problem has a synthetic regression fixture in `tests/explanations/live
 - SIGNOFF_PEPPER missing from `.env.local` → documented as required (see Environment variable names).
 Local results: unit/integration 651/651; tsc and eslint clean; isolated e2e: explain 46/46, flag-on 57/57,
 flag-off 17/17, e2e-local 95/95.
+
+### Focused live retest (2026-11-15, approved)
+
+- Test-account password rotated first (the old value had been exposed in tool output): project, account and exact
+  fictional profile verified; new value stored only in the private files; sign-in verified. The password change
+  invalidated existing sessions (a session opened before the change could no longer refresh).
+- One new match run (`747395d6…`) and one explanation on job `c5a0ab5b…`, through a local production build with a
+  request guard. Outbound: Supermemory 23 search requests (limit 46, reads only), Gemini 1 (limit 3), TinyFish 0,
+  email 0; nothing blocked. One extra explanation attempt was refused by the app's own daily limit before any call
+  (the limit was set to 1 and an explanation already existed that day); nothing was saved by it.
+- Results: assessments unchanged (EPA 608 no sufficient evidence, 11 `cannot_assess`, 0 evidence found). Explanation:
+  AI ok, 0 rejected references, 0 withheld (was 5). Charging shown as checked only; ServiceTitan and electrical lines
+  link nothing; no "Installation documented" on the team, wiring-diagram or diagnosing lines; no duplicates; the
+  shared no-related step shown once (6 lines). UI acceptance 24/24, including suggested actions and the printable
+  report (links hidden in print).
+- Writes: +1 match run, +12 results, +2 evidence links, +1 explanation, +1 rate-limit row. No evidence, profile,
+  opportunity, email or sign-off changes. Alex, Jordan and Sam unchanged (Sam 2 of 4).
+- Known limit: a quote shows at most 3 lines per record, so a documented task can be in the task check but not in
+  that record's quote (here "startup documented"; "Started up the system" is the record's 4th related line).
 
 ### WARNING: local configuration touches hosted data
 
