@@ -69,7 +69,7 @@ async function evaluateAndSave(workerId: string, oppId: string) {
   const runId = (started.data as { id: string }[])[0].id;
   const db = toDbPayload(res);
   const fin = await admin.rpc("finalize_match_run", { p_worker_id: workerId, p_run_id: runId, p_results: db.results, p_matches: db.matches, p_memory_warning: "LOCAL TEST FIXTURE: evaluated directly without memory search." });
-  return { status: fin.data as string, results: res };
+  return { status: fin.data as string, results: res, runId };
 }
 
 async function signIn(e: string, pw: string) {
@@ -86,8 +86,9 @@ async function signIn(e: string, pw: string) {
 
 async function openReport(p: Page, oppId: string) {
   await p.goto(`${APP}/reports`, { waitUntil: "networkidle0" });
-  await p.waitForSelector("select[aria-label=Job]");
-  await p.select("select[aria-label=Job]", oppId);
+  // The job selector exists only when the technician has more than one job.
+  await p.waitForFunction(() => document.body.innerText.includes("Requirement by requirement") || !!document.querySelector("select[aria-label=Job]"), { timeout: 30000 });
+  if (await p.$("select[aria-label=Job]")) await p.select("select[aria-label=Job]", oppId);
   await p.waitForFunction(() => document.body.innerText.includes("Requirement by requirement"), { timeout: 30000 });
   await sleep(800);
   return text(p);
@@ -123,6 +124,7 @@ if (PHASE === "flag-off") {
     await p.waitForFunction(() => document.body.innerText.includes("Your evidence fit"));
     const page = await text(p);
     check("import card hidden", !page.includes("See how your experience fits a job"));
+    check("AI explanations off: not reported, no offer, route answers 404", me.j?.features?.aiExplanations === false && !page.includes("Explain related evidence") && (await api(p, `/api/matches/${randomUUID()}/explanations`, "POST")).s === 404);
     check("confirmed pasted job still opens with provenance, wording and fit summary", page.includes("Requirements quoted from listing text you supplied") && page.includes("Your evidence fit") && page.includes("EPA 608 Universal certification required"));
     const listed = await api(p, "/api/opportunities");
     check("both confirmed imported jobs still listed with import details", [st.urlJob, st.pastedJob].every((id) => listed.j?.opportunities?.some((o: { id: string; importInfo: unknown }) => o.id === id && o.importInfo)));
@@ -203,6 +205,181 @@ if (PHASE === "flag-off") {
     await browser.close();
     const failed = results.filter((r) => !r).length;
     console.log(`\ne2e-import flag-off: ${results.length - failed}/${results.length} passed`);
+    process.exit(failed ? 1 : 0);
+  }
+}
+
+if (PHASE === "explain") {
+  // "Related evidence — AI-assisted explanation" with AI_EXPLANATIONS_ENABLED=true and AI_EXPLANATIONS_MODE=stub:
+  // deterministic stand-ins for Supermemory and Gemini, so NOTHING leaves this machine. Separate fictional technicians.
+  const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+  const newTech = async (tag: string) => {
+    const e = `explain-${tag}-${run}@test.qualitrail.dev`;
+    const created = await admin.auth.admin.createUser({ email: e, password, email_confirm: true });
+    if (created.error) throw new Error(`createUser ${created.error.status}`);
+    const p = await signIn(e, password);
+    const on = await api(p, "/api/onboarding", "POST", { role: "worker", name: `Explain E2E ${tag} ${run} (fictional)`, trade: "HVAC (test)" });
+    if (on.s !== 200) throw new Error(`onboarding ${on.s}`);
+    return { p, workerId: (await api(p, "/api/me")).j.worker.id as string };
+  };
+  // Marked indexed with the memory document id a real index would store (lib/server/memory/conventions.ts), so the
+  // app's reconciliation leaves them alone; the stub search then reads them without Supermemory.
+  const record = (workerId: string, title: string, activities: string[], summary: string | null = null, id = randomUUID()) => ({
+    id, memory_document_id: `${id}_v1`, worker_id: workerId, type: "work_record", title, source_date: "2025-04-02", issuer: "Fictional Air Co.",
+    structured_data: { skills: [], activities, equipment: [], expirationDate: null, credentialNumber: null, summary },
+    source_kind: "manual_text", file_hash: sha(`${title}${run}`), verification_status: "self_reported", is_synthetic: true, index_status: "indexed",
+  });
+  const listing = (title: string) => [
+    title, "Fictional Cooling Co. - Tempe, AZ", "", "This listing is invented for a QualiTrail test.", "",
+    "Requirements:",
+    "EPA 608 Universal certification required",
+    "Proficiency with brazing, pressure testing, evacuation, refrigerant charging, and system start-up",
+    "Valid driver's license",
+    "3+ years of residential HVAC installation experience",
+    "Ability to read blueprints and schematics",
+    "Comfortable working in attics and crawl spaces",
+    "Experience with ductwork or line sets",
+  ].join("\n");
+  const importJob = async (p: Page, title: string) => {
+    const d = await api(p, "/api/imports", "POST", { text: listing(title) });
+    if (d.s !== 201) throw new Error(`import ${d.s}`);
+    const c = await api(p, `/api/imports/${d.j.id}/confirm`, "POST", { version: d.j.version, acknowledgeWarnings: true });
+    if (c.s !== 200) throw new Error(`confirm ${c.s}`);
+    return c.j.opportunityId as string;
+  };
+  const snapshot = async (workerId: string, runId: string) => JSON.stringify({
+    results: (await admin.from("requirement_results").select("*").eq("match_run_id", runId).order("requirement_id")).data,
+    matches: (await admin.from("evidence_matches").select("*").eq("match_run_id", runId).order("id")).data,
+    run: (await admin.from("match_runs").select("status, evidence_revision").eq("id", runId).single()).data,
+    evidence: (await admin.from("evidence").select("id, verification_status, version").eq("worker_id", workerId).order("id")).data,
+  });
+  const fitText = async (p: Page) => (await text(p)).split("Your evidence fit")[1]?.split("Requirements")[0] ?? "";
+  const reportCounts = (t: string) => ["Evidence found", "Needs review", "No sufficient evidence found", "Can't assess automatically"].map((k) => (t.match(new RegExp(`${k}\\s*\\d+`)) ?? [""])[0]).join("|");
+  const panels = (p: Page) => p.evaluate(() => [...document.querySelectorAll("[data-section=related-evidence] [data-related-kind]")].map((el) => ({ kind: (el as HTMLElement).dataset.relatedKind!, text: (el as HTMLElement).innerText, links: [...el.querySelectorAll("a")].map((a) => a.getAttribute("href") ?? "") })));
+  const stored = async (runId: string) => (await admin.from("match_run_explanations").select("*").eq("match_run_id", runId).maybeSingle()).data;
+  const POSITIVE = /\b(you (?:meet|qualify|are qualified|satisfy)|meets? (?:this|the) requirement|is eligible|you are eligible|verified record|proves?)\b/i;
+
+  try {
+    const { p, workerId } = await newTech("a");
+    const me = await api(p, "/api/me");
+    check("/api/me reports AI explanations on (stub mode, isolated local)", me.j?.features?.aiExplanations === true, JSON.stringify(me.j?.features));
+    const recs = await admin.from("evidence").insert([
+      record(workerId, "Line set replacement (FICTIONAL)", ["Brazed copper line set"]),
+      record(workerId, "Helper day on a mini-split job (FICTIONAL)", ["Assisted the lead with evacuation"]),
+      record(workerId, "Mini-split install (FICTIONAL)", ["Installed ductless mini-split", "Startup was done by another crew"]),
+      record(workerId, "Service visit (FICTIONAL)", ["Did not pressure test the system", "Replaced capacitor"]),
+      record(workerId, "Site visit notes (FICTIONAL)", ["Visited site"], "Charged the system to spec. Customer Jane Roe, jane@example.com, 12 Oak Street"),
+    ]).select("id, title");
+    check("five fictional, indexed records added", !recs.error && recs.data?.length === 5, recs.error?.code);
+    const own = new Set((recs.data ?? []).map((r) => r.id as string));
+
+    // A. Supported, partial, assisted, by-others, negated, summary-only, unrelated and eligibility lines.
+    const jobA = await importJob(p, "Fictional Mini-Split Installer (explain test)");
+    const runA = await evaluateAndSave(workerId, jobA);
+    const kindsA = runA.results.map((r) => r.assessment);
+    check("checked assessments: EPA honest gap, every other line cannot_assess", JSON.stringify(kindsA) === JSON.stringify(["no_sufficient_evidence", ...Array(6).fill("cannot_assess")]), JSON.stringify(kindsA));
+    const before = await snapshot(workerId, runA.runId);
+    await p.goto(`${APP}/opportunities?job=${jobA}`, { waitUntil: "networkidle0" });
+    await p.waitForSelector("[data-section=explain-offer]");
+    const fitBefore = await fitText(p);
+    const offer = await p.$eval("[data-section=explain-offer]", (el) => (el as HTMLElement).innerText);
+    check("offer states what is sent and what never is", /6 lines couldn.t be assessed/.test(offer) && /never your summary, files, signatures, customer details or comments/.test(offer) && /does not change your checked results/.test(offer));
+    check("nothing generated before the technician asks", (await stored(runA.runId)) === null);
+    await clickText(p, "Explain related evidence");
+    await p.waitForSelector("[data-section=related-evidence]", { timeout: 60000 });
+    await sleep(500);
+    const pa = await panels(p);
+    check("one panel per cannot_assess line, in listing order", JSON.stringify(pa.map((x) => x.kind)) === JSON.stringify(["ai", "eligibility", "eligibility", "no_related", "eligibility", "ai"]), JSON.stringify(pa.map((x) => x.kind)));
+    const sec = await p.$eval("[data-section=related-evidence]", (el) => (el as HTMLElement).innerText);
+    check("section labelled: not a checked match, changes no counts, AI parts can be wrong", sec.includes("Related evidence — AI-assisted explanation") && sec.includes("Not a checked match") && sec.includes("does not change the assessment above"));
+    const tasks = pa[0]?.text ?? "";
+    console.log(`      breakdown: ${(tasks.match(/From your records' wording: (.*)/) ?? ["", "(none)"])[1]}`);
+    check("partial support: only brazing documented", /From your records' wording: Brazing documented; /.test(tasks));
+    check("assisted, done by others, not done and summary-only are stated as such", /evacuation: assisted or observed only/.test(tasks) && /startup: done by someone else/.test(tasks) && /pressure testing: the record says it was not done/.test(tasks) && /refrigerant charging: mentioned only in a record's summary/.test(tasks), tasks.split("\n").find((l) => l.includes("wording")));
+    check("AI-written parts are labelled", /What this asks for \(AI-written\)/.test(tasks) && /Suggested next step \(AI-written\)/.test(tasks));
+    check("alternatives (ductwork OR line sets) stated as such", /The line accepts any one of these\. Line sets documented; ductwork not established\./.test(pa[5]?.text ?? ""));
+    const elig = pa.filter((x) => x.kind === "eligibility");
+    check("eligibility lines: clarification only, no AI-written part, nothing inferred", elig.length === 3 && elig.every((x) => /What would need clarifying/.test(x.text) && !/AI-written/.test(x.text) && !POSITIVE.test(x.text)), elig.map((x) => x.text.slice(0, 80)).join(" | "));
+    check("duration line: task records shown as context only", /context only; they do not establish this condition/.test(elig[1]?.text ?? ""));
+    check("unrelated line: says no related record, nothing positive", /No related record was found/.test(pa[3]?.text ?? "") && !/Records that may relate/.test(pa[3]?.text ?? ""));
+    check("no panel claims the technician meets or is verified for anything", pa.every((x) => !POSITIVE.test(x.text)));
+    const links = pa.flatMap((x) => x.links).map((h) => h.split("evidence-")[1]);
+    check("every cited record is one of this technician's records", links.length > 0 && links.every((id) => own.has(id)), links.join(","));
+    const rowA = await stored(runA.runId);
+    const cited = ((rowA?.items ?? []) as { related: { evidenceId: string }[] }[]).flatMap((i) => i.related.map((r) => r.evidenceId));
+    check("stored: completed, AI ok, no rejected references, only supplied ids", rowA?.status === "completed" && rowA?.ai_status === "ok" && rowA?.rejected_references === 0 && cited.every((id) => own.has(id)), JSON.stringify({ s: rowA?.status, a: rowA?.ai_status, r: rowA?.rejected_references }));
+    check("stored explanation carries no assessment and no summary or customer details", !JSON.stringify(rowA?.items).includes('"assessment"') && !/Jane Roe|jane@example\.com|Oak Street|Charged the system/.test(JSON.stringify(rowA?.items)));
+    check("checked results, evidence links, run and verification statuses unchanged", (await snapshot(workerId, runA.runId)) === before);
+    await p.reload({ waitUntil: "networkidle0" });
+    await p.waitForSelector("[data-section=related-evidence]");
+    const fitAfter = await fitText(p);
+    const counts = (t: string) => t.split("Your next step")[0];
+    check("fit summary counts identical after explaining", counts(fitAfter) === counts(fitBefore) && /Can.t assess automatically\n6/.test(fitAfter), `${JSON.stringify(fitBefore.slice(0, 300))} vs ${JSON.stringify(fitAfter.slice(0, 300))}`);
+    const again = await api(p, `/api/matches/${runA.runId}/explanations`, "POST");
+    const rowA2 = await stored(runA.runId);
+    const kindsOf = (xs: unknown) => JSON.stringify(((xs ?? []) as { kind: string; requirementId: string }[]).map((i) => `${i.requirementId}:${i.kind}`));
+    const sameKinds = kindsOf(again.j?.explanations?.items) === kindsOf(rowA?.items) && kindsOf(rowA?.items).length > 2;
+    check("asking again returns the saved explanation, no new generation", again.s === 200 && rowA2?.attempts === 1 && rowA2?.updated_at === rowA?.updated_at && sameKinds, `${again.s} attempts=${rowA2?.attempts} sameTime=${rowA2?.updated_at === rowA?.updated_at} sameKinds=${sameKinds}`);
+
+    const rep = await openReport(p, jobA);
+    check("report: related-evidence section after the checked results", (await p.$("[data-section=related-evidence]")) !== null && rep.indexOf("Your next steps") < rep.indexOf("Related evidence — AI-assisted explanation"));
+    check("report: counts are the checked ones (6 cannot assess, 1 no sufficient evidence)", /Can't assess automatically\s*6/.test(rep) && /No sufficient evidence found\s*1/.test(rep), reportCounts(rep));
+    await p.emulateMediaType("print");
+    const pv = await p.evaluate(() => {
+      const s = document.querySelector("[data-section=related-evidence]") as HTMLElement | null;
+      const a = [...(s?.querySelectorAll("a") ?? [])] as HTMLElement[];
+      return { shown: !!s && s.offsetParent !== null, linksHidden: a.length > 0 && a.every((x) => x.offsetParent === null) };
+    });
+    await p.emulateMediaType("screen");
+    check("report: section prints, on-screen record links left out", pv.shown && pv.linksHidden, JSON.stringify(pv));
+    check("report: still printable", await printable(p));
+
+    // B. A model reference to a record that was never supplied is rejected and counted.
+    const jobB = await importJob(p, "Fictional Service Tech (stub:bad-ref)");
+    const runB = await evaluateAndSave(workerId, jobB);
+    const xb = await api(p, `/api/matches/${runB.runId}/explanations`, "POST");
+    const bItems = (xb.j?.explanations?.items ?? []) as { kind: string; related: { evidenceId: string }[] }[];
+    check("bad reference rejected and counted; only supplied records kept", xb.s === 200 && xb.j.explanations.rejectedReferences === 1 && bItems.flatMap((i) => i.related.map((r) => r.evidenceId)).every((id) => own.has(id)), JSON.stringify({ s: xb.s, r: xb.j?.explanations?.rejectedReferences }));
+    await p.goto(`${APP}/opportunities?job=${jobB}`, { waitUntil: "networkidle0" });
+    await p.waitForSelector("[data-section=related-evidence]");
+    check("page says one AI reference was removed", (await text(p)).includes("1 reference the AI gave did not match a record you supplied and was removed"));
+
+    // C. The model failing keeps the deterministic content; checked results are untouched.
+    const jobC = await importJob(p, "Fictional Installer (stub:fail)");
+    const runC = await evaluateAndSave(workerId, jobC);
+    const beforeC = await snapshot(workerId, runC.runId);
+    await p.goto(`${APP}/opportunities?job=${jobC}`, { waitUntil: "networkidle0" });
+    await p.waitForSelector("[data-section=explain-offer]");
+    await clickText(p, "Explain related evidence");
+    await p.waitForSelector("[data-section=related-evidence]", { timeout: 60000 });
+    const pc = await panels(p);
+    check("model failure: banner, deterministic breakdown kept, eligibility and no-related unchanged", (await text(p)).includes("The AI step failed") && JSON.stringify(pc.map((x) => x.kind)) === JSON.stringify(["ai_unavailable", "eligibility", "eligibility", "no_related", "eligibility", "ai_unavailable"]) && /Brazing/.test(pc[0]?.text ?? "") && !/AI-written/.test(pc.map((x) => x.text).join(" ")), JSON.stringify(pc.map((x) => x.kind)));
+    check("model failure: checked results unchanged", (await snapshot(workerId, runC.runId)) === beforeC && (await stored(runC.runId))?.ai_status === "failed");
+
+    // D. A technician with no records: nothing positive is generated.
+    const t2 = await newTech("b");
+    const jobD = await importJob(t2.p, "Fictional Mini-Split Installer (explain test)");
+    const runD = await evaluateAndSave(t2.workerId, jobD);
+    const xd = await api(t2.p, `/api/matches/${runD.runId}/explanations`, "POST");
+    const dItems = (xd.j?.explanations?.items ?? []) as { kind: string; related: unknown[]; asks: string | null }[];
+    check("no evidence: every non-eligibility line says nothing related, no AI text", xd.s === 200 && dItems.length === 6 && dItems.every((i) => (i.kind === "no_related" || i.kind === "eligibility") && i.related.length === 0 && i.asks === null), JSON.stringify(dItems.map((i) => i.kind)));
+    const foreign = await api(t2.p, `/api/matches/${runA.runId}/explanations`, "POST");
+    check("another technician's run is not available", foreign.s === 404, String(foreign.s));
+
+    // E. A run made stale by a new record is refused before any generation.
+    const runF = await evaluateAndSave(t2.workerId, jobD);
+    await admin.from("evidence").insert(record(t2.workerId, "Another record after the run (FICTIONAL)", ["Installed condensate line"]));
+    const xe = await api(t2.p, `/api/matches/${runF.runId}/explanations`, "POST");
+    check("an out-of-date run is refused before any generation", xe.s >= 400 && (await stored(runF.runId)) === null, String(xe.s));
+    const runE = await evaluateAndSave(t2.workerId, jobD);
+    check("a current run for the new record set can be explained", runE.status === "completed" && (await api(t2.p, `/api/matches/${runE.runId}/explanations`, "POST")).s === 200);
+  } catch (e) {
+    check("aborted", false, (e as Error).message);
+  } finally {
+    check("no uncaught page errors", errors.length === 0, errors.slice(0, 2).join(" | "));
+    await browser.close();
+    const failed = results.filter((r) => !r).length;
+    console.log(`\ne2e-import explain: ${results.length - failed}/${results.length} passed`);
     process.exit(failed ? 1 : 0);
   }
 }

@@ -2,8 +2,8 @@
 
 ## HANDOFF (updated 2026-11-15): read this first
 
-**Branch:** `feature/job-import` (draft PR #11, unmerged). **Final implementation commit:** `552ef01`
-(`d856bd0` feature, `629a7a9` follow-up checks, `552ef01` "Your next steps"). Later commits only update this handoff.
+**Branch:** `feature/job-import` (draft PR #11, unmerged). Commits: `d856bd0` feature, `629a7a9` follow-up checks,
+`552ef01` "Your next steps", then the AI-assisted explanation layer (see "Status" and the data-boundary section).
 Work continues on the original Mac; the other-laptop transfer is no longer needed.
 
 ### Status
@@ -14,8 +14,20 @@ Done (on the branch, flag off by default):
 - Deterministic rule catalog, `cannot_assess` everywhere, priority read from listing wording, headline-only term
   matching (install-only evidence never satisfies install-and-startup), plain-text listings, flag-off behaviour.
 - **"Your next steps"** (see the section below): fit summary, selected requirement and printable report.
+- **"Related evidence — AI-assisted explanation"** (separate flag, off by default; see "AI-assisted explanation: data
+  boundary"): explains `cannot_assess` lines from the technician's own related records; never changes checked results.
+  Tested with local stubs only.
 
 Pending: the live provider acceptance test, then release (both below; each step needs approval).
+
+### Checks actually run for the explanation layer (isolated local stack, ALL providers stubbed)
+
+- Full vitest suite including DB tests: 563/563 (41 files); typecheck, lint and production build clean.
+- `scripts/e2e-import.mts explain`: **34/34** (fictional technicians; supported, partial, assisted, done-by-others,
+  not-done, summary-only, unrelated, absent evidence; eligibility lines; rejected reference; model failure; stale run;
+  another technician's run; checked results, links, verification statuses and counts byte-identical before/after;
+  report section prints without links). Flag-on 57/57 with explanations on, flag-off 17/17, `e2e-local.mjs` 95/95.
+- No live Gemini, Supermemory or TinyFish call was made. The explanations migration is applied LOCALLY only.
 
 ### Checks actually run (on 552ef01, isolated local stack, all providers stubbed)
 
@@ -108,7 +120,12 @@ Isolated local stack (no hosted data, no providers):
    1–2 match runs, rate-limit rows; no emails, no evidence changes, no cleanup. Verify wording, priorities, honest
    `cannot_assess` lines (do not broaden the catalog), evidence links, "Your next steps" against the real run
    (do not click Request/Send in any panel), printable report.
-5. **Each needs separate approval:** Vercel variables with the flag off → merge PR #11 → deploy → enable the flag.
+5. **Needs approval (new use of Gemini with worker evidence):** apply `20261119100000_match_run_explanations.sql`
+   to the hosted DB (backup first), then one live explanation test as the test technician with
+   `AI_EXPLANATIONS_ENABLED=true` locally only. Caps: 1 batched Gemini request per run (≤3 model attempts), ≤2 runs;
+   Supermemory ≤ one search per explained line (≤20 per run), no writes. Expected writes: 1–2
+   `match_run_explanations` rows and rate-limit rows only.
+6. **Each needs separate approval:** Vercel variables with the flags off → merge PR #11 → deploy → enable each flag.
 
 A technician pastes a public job-listing link (or the listing text). QualiTrail retrieves that one page, drafts the
 requirement lines, lets the technician review them, then compares them with the technician's own saved records
@@ -118,8 +135,52 @@ and shows a fit summary and report.
 
 - **TinyFish Fetch** receives the listing URL only (`urls`, `format`, `per_url_timeout_ms`). Never the technician's
   name, profile, evidence, documents or account. No forms, sign-ins or applications.
-- **Gemini** receives the listing text only.
+- **Gemini (drafting)** receives the listing text only.
+- **Gemini (AI-assisted explanation, separate flag `AI_EXPLANATIONS_ENABLED`, off by default)** receives minimal,
+  redacted worker evidence. This is a NEW use of Gemini with worker data; see the next section. It must not be
+  switched on anywhere hosted without explicit approval.
 - Pasted text never goes to TinyFish.
+
+## AI-assisted explanation: data boundary
+
+A separate, clearly labelled layer, "Related evidence — AI-assisted explanation", for lines the checker marked
+"Can't assess automatically". The checked (deterministic) assessments are produced first and are never changed by it.
+
+When it runs: only when the technician presses "Explain related evidence" on a CURRENT match run. One generation per
+run (repeats return the saved one; at most 3 attempts per run; daily limit per technician; 30 requests/hour).
+
+What is sent to Gemini (one batched request per run, at most 3 model attempts, 90 s budget):
+- the employer's wording of each `cannot_assess` line that is NOT an eligibility condition, with opaque refs (Q1…);
+- for each such line, up to 5 related records of THIS technician, with opaque refs (E1…): type, title, date (year
+  and month), issuer, skills, work performed, equipment and a status label ("self-reported", "document supplied by
+  the technician", …), each list clipped, with emails, phone numbers and street addresses removed;
+- a deterministic task check computed from the records' own wording (documented / assisted / done by others /
+  not done / summary only / not established).
+
+Never sent: summaries, original files or their text, credential numbers, signatures, customer names or contact
+details, sign-off or supervisor comments, record or worker ids, versions, the technician's name or profile.
+Never sent at all: duration, driving/licence, physical, work authorisation, background check, education and schedule
+lines. They get a fixed "what would need clarifying" text and are never inferred from records.
+
+Supermemory: one search per explained line, using the employer's line text, inside the technician's own namespace
+(the same search matching already uses). Hits are kept only if they are the technician's current, indexed records.
+
+Treated as untrusted: listing and record text are passed as data; the prompt tells the model to ignore instructions
+inside them. The response is validated:
+- every cited ref must be one supplied FOR THAT LINE; unknown, cross-line and duplicate refs are removed and counted
+  (the page says how many were removed);
+- an item citing nothing valid, or claiming the technician meets/qualifies/is eligible/is verified, is discarded and
+  replaced with the deterministic content;
+- "no related evidence" is said plainly; nothing positive is written without a valid supplied record.
+
+What it can never do: change any assessment, verification status, evidence link, "Evidence found" total, fit summary
+count or "Your next steps". It is stored in its own server-only table `match_run_explanations` (no browser access;
+writes only through `explanation_claim/save/fail`, service role only). Items are marked out of date when a cited
+record changes. If the model fails, the deterministic task check, eligibility and no-related texts are shown with a
+notice. AI-written parts are labelled; record links show on screen only, not in print.
+
+Retention: kept with the match run (deleted with it). Migration `20261119100000_match_run_explanations.sql` is
+additive; rollback while empty: `scripts/sql/rollback-explanations-if-empty.sql`.
 
 ## Flow and states
 
@@ -220,7 +281,8 @@ the printed report keeps the text.
 ## Configuration
 
 See `.env.example`: `OPPORTUNITY_IMPORT_ENABLED`, `TINYFISH_API_KEY` (server-only), `TINYFISH_MODE`,
-`IMPORT_DAILY_LIMIT`. `GEMINI_API_KEY` is also required. Problems answer 503 "not available" and are logged by name only.
+`IMPORT_DAILY_LIMIT`. `GEMINI_API_KEY` is also required. AI-assisted explanation: `AI_EXPLANATIONS_ENABLED`,
+`AI_EXPLANATIONS_MODE`, `AI_EXPLANATIONS_DAILY_LIMIT` (live mode also needs `SUPERMEMORY_API_KEY`). Problems answer 503 "not available" and are logged by name only.
 
 ## Migration and rollback
 
@@ -239,12 +301,18 @@ result exists). `opportunity_import_expire()` clears expired drafts; no schedule
   the printable report), then `scripts/e2e-import.mts flag-off` after restarting with the flag off (saved jobs and
   reports stay readable, a stale run stays unprintable, import routes answer 404). The local match runs there are
   labelled fixtures because the isolated stack has no Supermemory.
+- AI-assisted explanation: `tests/explanations/*.test.ts` (task breakdown, planning, minimal/redacted input,
+  reference validation, orchestration), `tests/db/explanations.test.ts`, and `scripts/e2e-import.mts explain` with
+  `AI_EXPLANATIONS_ENABLED=true AI_EXPLANATIONS_MODE=stub` (job titles containing `stub:bad-ref` / `stub:fail`
+  exercise rejected references and model failure).
 - `npm run test:db` assumes Postgres on 5432; for the Supabase CLI stack set
   `TEST_DATABASE_ADMIN_URL=postgres://postgres:postgres@127.0.0.1:54322/postgres` and run `npx vitest run tests/db`.
 
 ## Limitations
 
-- Not tested against live TinyFish or live Gemini drafting yet.
+- Not tested against live TinyFish, live Gemini drafting or live Gemini/Supermemory explanations yet.
+- Explanations are only as good as the records' wording; the task vocabulary is explicit and small, and the local
+  stub search (word overlap) is not a model of real Supermemory relevance.
 - Listings behind sign-in, bot protection or in images/attachments need the paste fallback.
 - The catalog is deliberately small; most real postings will have several "Can't assess automatically" lines.
 - The stored listing is a snapshot; listing refresh/supersede (`supersedes_id`) is not implemented yet.

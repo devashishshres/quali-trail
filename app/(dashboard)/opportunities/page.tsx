@@ -10,6 +10,7 @@ import { FIXTURE_MODE } from "@/lib/client/api";
 import { accountsApi } from "@/lib/client/accounts-api";
 import { FitSummary } from "@/components/opportunities/fit-summary";
 import { NextStepList } from "@/components/opportunities/next-steps";
+import { ExplainBlock, RelatedEvidencePanel } from "@/components/opportunities/related-evidence";
 import { nextSteps, type ConfirmFlows } from "@/lib/next-steps";
 import { ImportCard } from "@/components/opportunities/import-card";
 import { Constellation } from "@/components/opportunities/constellation";
@@ -46,12 +47,12 @@ export default function OpportunitiesPage() {
       {opps.status === "loading" && <Loading label="Loading opportunities…" />}
       {opps.error && <ErrorNotice error={opps.error} onRetry={opps.reload} />}
       {opps.data && !opportunity && <p className="text-slate">No opportunities yet.</p>}
-      {opportunity && <Matcher key={opportunity.id} opportunity={opportunity} flows={me.data ? { customerSignoff: me.data.features.customerSignoff, supervisorReview: me.data.features.supervisorReview } : null} />}
+      {opportunity && <Matcher key={opportunity.id} opportunity={opportunity} flows={me.data ? { customerSignoff: me.data.features.customerSignoff, supervisorReview: me.data.features.supervisorReview } : null} aiExplanations={!!me.data?.features.aiExplanations} />}
     </>
   );
 }
 
-function Matcher({ opportunity, flows }: { opportunity: Opportunity; flows: ConfirmFlows | null }) {
+function Matcher({ opportunity, flows, aiExplanations }: { opportunity: Opportunity; flows: ConfirmFlows | null; aiExplanations: boolean }) {
   const latest = useLoad(() => api.latestMatch(opportunity.id), opportunity.id);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<ApiRequestError | null>(null);
@@ -152,6 +153,11 @@ function Matcher({ opportunity, flows }: { opportunity: Opportunity; flows: Conf
           <FitSummary opportunity={opportunity} run={run} onSelect={setReqId} flows={flows} />
         </div>
       )}
+      {run && response && (
+        <div className="mt-6">
+          <ExplainBlock run={run} opportunity={opportunity} explanations={response.explanations} enabled={aiExplanations} onReady={(x) => latest.setData({ ...response, explanations: x })} />
+        </div>
+      )}
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,22rem)_1fr]">
         <div>
@@ -172,6 +178,10 @@ function Matcher({ opportunity, flows }: { opportunity: Opportunity; flows: Conf
             <>
               <Constellation result={selectedResult} runId={run.id} />
               {selectedResult.assessment === "cannot_assess" && <p className="mt-4 text-sm">{CANNOT_ASSESS_NOTE}</p>}
+              {(() => {
+                const item = response?.explanations?.status === "completed" ? response.explanations.items.find((x) => x.requirementId === selectedResult.requirementId) : undefined;
+                return item ? <div className="mt-4"><RelatedEvidencePanel item={item} /></div> : null;
+              })()}
               {selectedResult.assessment !== "evidence_found" && (
                 <div className="mt-4">
                   <p className="text-sm font-semibold">Your next steps for this requirement</p>

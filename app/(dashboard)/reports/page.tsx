@@ -11,6 +11,7 @@ import { useLoad } from "@/lib/client/use-load";
 import { CANNOT_ASSESS_NOTE, NO_EVIDENCE_NOTE, PRIORITY_LABEL, TYPE_LABEL, formatDate, formatStamp } from "@/lib/client/labels";
 import { FitSummary } from "@/components/opportunities/fit-summary";
 import { NextStepsSection } from "@/components/opportunities/next-steps";
+import { RelatedEvidenceSection } from "@/components/opportunities/related-evidence";
 import { accountsApi } from "@/lib/client/accounts-api";
 import type { ConfirmFlows } from "@/lib/next-steps";
 import { ErrorNotice, Loading, Notice, PageHeader } from "@/components/ui/states";
@@ -216,6 +217,11 @@ function Packet({ worker, evidence, opportunity, flows }: { worker: Worker; evid
         <div className="mt-6">
           <NextStepsSection opportunity={opportunity} run={run} flows={flows} />
         </div>
+        {latest.data?.explanations?.status === "completed" && (
+          <div className="mt-6">
+            <RelatedEvidenceSection opportunity={opportunity} explanations={latest.data.explanations} />
+          </div>
+        )}
 
         <section className="mt-8">
           <h3 className="font-display text-2xl font-semibold">Requirement by requirement</h3>

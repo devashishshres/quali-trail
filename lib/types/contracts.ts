@@ -8,6 +8,7 @@
  * Owner: Developer B. Breaking changes must be announced before merging.
  */
 import { z } from "zod";
+import { RunExplanations } from "./explanations";
 
 /* ------------------------------------------------------------------ */
 /* Enums                                                               */
@@ -448,6 +449,8 @@ export const MatchRunResponse = z.object({
   previousRunId: Id.nullable(),
   /** Empty when there is no previous run. */
   changes: z.array(RequirementChange),
+  /** "Related evidence — AI-assisted explanation" for this run, if generated. Never part of the assessment. */
+  explanations: RunExplanations.nullable().optional(),
 });
 export type MatchRunResponse = z.infer<typeof MatchRunResponse>;
 

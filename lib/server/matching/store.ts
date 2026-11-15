@@ -5,6 +5,8 @@ import { MatchRun, MatchRunResponse, RequirementResult, type Evidence } from "@/
 import { computeChanges } from "./changes";
 import { RunInProgressError, type MatchPorts } from "./run";
 import type { MemorySearcher } from "../memory/types";
+import { readExplanations } from "../explanations/store";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 interface RunRow {
   id: string;
@@ -131,11 +133,14 @@ async function previousRun(user: SupabaseClient, workerId: string, run: MatchRun
 export async function readRunResponse(user: SupabaseClient, workerId: string, runId: string): Promise<MatchRunResponse | null> {
   const run = await readRun(user, workerId, runId);
   if (!run) return null;
-  const prev = await previousRun(user, workerId, run, run.createdAt);
+  const [prev, evidence] = await Promise.all([previousRun(user, workerId, run, run.createdAt), loadWorkerEvidence(user, workerId)]);
+  // Separate, server-only layer; absent until generated (or before its migration is applied).
+  const explanations = await readExplanations(createAdminClient(), workerId, run.id, evidence);
   return MatchRunResponse.parse({
     matchRun: run,
     previousRunId: prev?.id ?? null,
     changes: prev ? computeChanges(prev.results, run.results) : [],
+    explanations,
   });
 }
 
