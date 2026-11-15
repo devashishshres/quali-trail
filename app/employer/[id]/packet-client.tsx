@@ -11,7 +11,8 @@ import { ErrorNotice, Loading } from "@/components/ui/states";
 
 export function PacketClient() {
   const { id } = useParams<{ id: string }>();
-  const r = useLoad(() => reviewerApi.get(id), id);
+  // Each fetch is logged as a view, so load once per page open (no refresh when the window regains focus).
+  const r = useLoad(() => reviewerApi.get(id), id, { refreshOnReturn: false });
   const [message, setMessage] = useState<string | null>(null);
 
   async function openOriginal(record: string) {

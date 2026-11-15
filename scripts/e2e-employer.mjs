@@ -282,6 +282,19 @@ try {
     && !/Private comment|Pat Example|Fictional Lane|CRED-|born 1990|3-ton heat pump/.test(view) && !view.includes(supEmail) && !view.includes(techEmail));
   check("reviewer view has no edit or decision controls", !(await R.$("form, textarea, input[type=email]")));
 
+  // Regression: returning to the window fired focus + visibilitychange, refetching (and logging a view) twice.
+  const views = async () => (await admin.from("employer_share_events").select("id").eq("share_id", shareRow.id).eq("event", "viewed")).data.length;
+  const v0 = await views();
+  for (let i = 0; i < 3; i++) {
+    await R.evaluate(() => { window.dispatchEvent(new Event("focus")); document.dispatchEvent(new Event("visibilitychange")); });
+    await sleep(1500);
+  }
+  check("switching back to the reviewer window logs no extra views", (await views()) === v0, `${v0} -> ${await views()}`);
+  await R.reload({ waitUntil: "networkidle0" });
+  await R.waitForFunction(() => document.body.innerText.includes("Certifications"));
+  await sleep(500);
+  check("one page load logs exactly one view", (await views()) === v0 + 1, `${v0} -> ${await views()}`);
+
   const docOk = await api(R, `/api/employer/shares/${shareRow.id}/document?record=${cert}`);
   const fileStatus = docOk.body?.url ? (await fetch(docOk.body.url)).status : 0;
   check("the authorized certificate original opens via a short-lived link", docOk.status === 200 && fileStatus === 200);
@@ -300,7 +313,7 @@ try {
 
   /* ------------------------------------------------------------ technician sees access, edits, withdraws */
   await W.goto(`${APP}/share`, { waitUntil: "networkidle0" });
-  await W.waitForFunction(() => document.body.innerText.includes("Viewed 1 time"));
+  await W.waitForFunction(() => document.body.innerText.includes("Viewed 2 times"));
   check("technician sees it was opened, viewed and the original opened", (await text(W)).includes("Opened") && (await text(W)).includes("originals opened 1"));
   must(await admin.from("evidence").update({ title: `Heat-pump install ${run} (edited)` }).eq("id", recA), "edit");
   await R.goto(`${APP}/employer/${shareRow.id}`, { waitUntil: "networkidle0" });
@@ -315,7 +328,7 @@ try {
   check("withdrawal ends original access", (await api(R, `/api/employer/shares/${shareRow.id}/document?record=${cert}`)).status === 404);
 
   const { data: events } = await admin.from("employer_share_events").select("event").eq("share_id", shareRow.id).order("id");
-  check("access log", JSON.stringify(events.map((e) => e.event)) === JSON.stringify(["invited", "accepted", "viewed", "original_opened", "viewed", "revoked"]), events.map((e) => e.event).join(","));
+  check("access log", JSON.stringify(events.map((e) => e.event)) === JSON.stringify(["invited", "accepted", "viewed", "viewed", "original_opened", "viewed", "revoked"]), events.map((e) => e.event).join(","));
   check("no browser page errors", pageErrors.length === 0, pageErrors.join(" | "));
 
   if (SERVER_LOG) {

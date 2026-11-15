@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { toApiError, type ApiRequestError } from "./errors";
+import { onReturnToPage } from "./on-return";
 
 export type LoadState<T> =
   | { status: "loading"; data?: undefined; error?: undefined }
@@ -10,9 +11,12 @@ export type LoadState<T> =
 /**
  * Load data on mount and whenever `key` changes. `reload()` refetches but
  * keeps the previous data on screen, so polling doesn't flash.
+ * Coming back to the page refreshes once (focus and visibilitychange are coalesced); pass
+ * `{ refreshOnReturn: false }` where every fetch has a side effect, such as the employer packet's view log.
  * ponytail: no request dedupe/cache — add SWR/React Query if pages start sharing data.
  */
-export function useLoad<T>(load: () => Promise<T>, key: string = "") {
+export function useLoad<T>(load: () => Promise<T>, key: string = "", opts: { refreshOnReturn?: boolean } = {}) {
+  const refreshOnReturn = opts.refreshOnReturn ?? true;
   const [state, setState] = useState<LoadState<T>>({ status: "loading" });
   const [nonce, setNonce] = useState(0);
 
@@ -30,15 +34,7 @@ export function useLoad<T>(load: () => Promise<T>, key: string = "") {
   }, [key, nonce]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
-  useEffect(() => {
-    const refresh = () => { if (document.visibilityState === "visible") reload(); };
-    window.addEventListener("focus", refresh);
-    document.addEventListener("visibilitychange", refresh);
-    return () => {
-      window.removeEventListener("focus", refresh);
-      document.removeEventListener("visibilitychange", refresh);
-    };
-  }, [reload]);
+  useEffect(() => (refreshOnReturn ? onReturnToPage(window, document, reload) : undefined), [reload, refreshOnReturn]);
   const setData = useCallback((data: T) => setState({ status: "ready", data }), []);
   return { ...state, reload, setData };
 }

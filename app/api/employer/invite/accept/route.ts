@@ -5,7 +5,7 @@ import { allow, clientIp, gone, guarded, json, off, rpc, tokenHash, tooMany } fr
 const MESSAGE: Record<string, string> = {
   wrong_account: "This packet was shared with a different email address. Sign in with the address it was sent to.",
   email_unconfirmed: "Confirm your email address first.",
-  self: "This is your own packet. Open it from your Reports page.",
+  self: "This is your own packet. You can see what you shared on your Share page.",
   expired: "This share has expired. Ask the technician to share it again.",
   revoked: "The technician withdrew this share.",
 };
