@@ -2,7 +2,7 @@ import { apiError, fieldErrors, ok } from "@/lib/api/responses";
 import { RESET_PATH } from "@/lib/server/accounts/recovery";
 import { configProblems, describeProblems } from "@/lib/server/config";
 import { logSignoffError } from "@/lib/server/signoff/redact";
-import { allow, clientIp } from "@/lib/server/signoff/service";
+import { allow, clientIp, guarded } from "@/lib/server/signoff/service";
 import { createUserClient } from "@/lib/supabase/server";
 import { RecoverRequest } from "@/lib/types";
 
@@ -13,7 +13,7 @@ const SENT = "If an account uses this address, we've sent a link to reset the pa
  * Same answer whether or not the account exists (no enumeration). Uses the cookie-bound client so the link
  * completes in this browser (PKCE). Not behind a feature flag: people must always be able to get back in.
  */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const body = RecoverRequest.safeParse(await request.json().catch(() => null));
   if (!body.success) return apiError("validation_failed", "Enter a valid email address.", fieldErrors(body.error));
   const pepperProblem = configProblems().filter((p) => p.name === "SIGNOFF_PEPPER");
@@ -39,3 +39,5 @@ export async function POST(request: Request) {
   }
   return ok({ message: SENT });
 }
+
+export const POST = guarded(handlePOST);

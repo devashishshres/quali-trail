@@ -17,6 +17,7 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
   memory_unavailable: 503,
   rate_limited: 429,
   onboarding_required: 403,
+  unavailable: 503,
   internal: 500,
 };
 

@@ -4,7 +4,7 @@ import { apiError, fieldErrors, ok } from "@/lib/api/responses";
 import { supervisorReviewEnabled } from "@/lib/server/accounts/flags";
 import { DELIVERY_FAILURE_MESSAGE } from "@/lib/server/email/deliver";
 import { notifyReviewRequested } from "@/lib/server/accounts/notify";
-import { allow, rpc } from "@/lib/server/signoff/service";
+import { allow, guarded, rpc } from "@/lib/server/signoff/service";
 import { listWorkerReviews } from "@/lib/server/accounts/reviews";
 import { CreateReviewRequest } from "@/lib/types";
 
@@ -18,7 +18,7 @@ const REASON: Record<string, string> = {
 };
 
 /** GET /api/reviews?evidenceId=… — this worker's supervisor reviews. */
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   const ctx = await getAuthedContext();
   if (!ctx) return apiError("unauthorized", "Sign in first.");
   if (!supervisorReviewEnabled()) return ok({ reviews: [] });
@@ -32,7 +32,7 @@ export async function GET(request: Request) {
 }
 
 /** POST /api/reviews { evidenceId, relationshipId } — freeze a snapshot and notify the supervisor. */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const ctx = await getAuthedContext();
   if (!ctx) return apiError("unauthorized", "Sign in first.");
   if (!supervisorReviewEnabled()) return apiError("not_found", "Supervisor review isn't available.");
@@ -45,3 +45,7 @@ export async function POST(request: Request) {
   // The request exists either way (it is in the supervisor's dashboard); a failed email is reported, not hidden.
   return ok({ id: r.id, notified: sent.ok, notice: sent.ok ? null : `${DELIVERY_FAILURE_MESSAGE[sent.reason]} The request is waiting in their QualiTrail dashboard.` }, 201);
 }
+
+export const GET = guarded(handleGET);
+
+export const POST = guarded(handlePOST);

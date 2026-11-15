@@ -1,8 +1,8 @@
-import { allow, clientIp, featureOn, gone, json, off, rpc, tokenHash, tooMany } from "@/lib/server/signoff/service";
+import { allow, clientIp, featureOn, gone, guarded, json, off, rpc, tokenHash, tooMany } from "@/lib/server/signoff/service";
 import type { GateResponse } from "@/lib/types";
 
 /** POST /api/signoff/gate — minimal facts for the invitation page. No job details. */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   if (!featureOn()) return off();
   if (!(await allow("gate-ip", await clientIp(), 600, 60))) return tooMany();
   const th = await tokenHash(request);
@@ -17,3 +17,5 @@ export async function POST(request: Request) {
   };
   return json(body);
 }
+
+export const POST = guarded(handlePOST);

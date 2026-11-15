@@ -5,13 +5,13 @@ import { signoffStatus } from "@/lib/server/signoff/config";
 import { hmac, newToken } from "@/lib/server/signoff/crypto";
 import { DELIVERY_FAILURE_MESSAGE, deliver } from "@/lib/server/email/deliver";
 import { templates } from "@/lib/server/email/templates";
-import { allow, appBaseUrl, rpc } from "@/lib/server/signoff/service";
+import { allow, appBaseUrl, guarded, rpc } from "@/lib/server/signoff/service";
 
 /**
  * POST /api/signoff/requests/:id/resend — a manual reminder. Bounded (one an hour, five invitations in total).
  * Issues a new link; the old link, sessions and codes stop working.
  */
-export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const ctx = await getAuthedContext();
   if (!ctx) return apiError("unauthorized", "Sign in first.");
   const status = signoffStatus();
@@ -38,3 +38,5 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   if (!sent.ok) return apiError("internal", `${DELIVERY_FAILURE_MESSAGE[sent.reason]} The previous link no longer works.`);
   return ok({ resent: true });
 }
+
+export const POST = guarded(handlePOST);

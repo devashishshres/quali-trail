@@ -7,7 +7,7 @@ import { hmac, maskEmail, newToken, normalizeEmail } from "@/lib/server/signoff/
 import { DELIVERY_FAILURE_MESSAGE, deliver } from "@/lib/server/email/deliver";
 import { templates } from "@/lib/server/email/templates";
 import { logSignoffError } from "@/lib/server/signoff/redact";
-import { allow, appBaseUrl, featureOn, rpc } from "@/lib/server/signoff/service";
+import { allow, appBaseUrl, featureOn, guarded, rpc } from "@/lib/server/signoff/service";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { CreateSignoffRequest, type ListSignoffsResponse, type WorkerSignoff } from "@/lib/types";
 
@@ -25,7 +25,7 @@ const REASON_MESSAGE: Record<string, string> = {
 };
 
 /** GET /api/signoff/requests?evidenceId=… — this worker's requests (masked address only). */
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   const ctx = await getAuthedContext();
   if (!ctx) return apiError("unauthorized", "Sign in first.");
   if (!featureOn()) return ok<ListSignoffsResponse>({ requests: [] }); // existing acknowledgments are shown only when the feature is on
@@ -70,7 +70,7 @@ export async function GET(request: Request) {
 }
 
 /** POST /api/signoff/requests — create a request and send the invitation. */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const ctx = await getAuthedContext();
   if (!ctx) return apiError("unauthorized", "Sign in first.");
   const status = signoffStatus();
@@ -123,3 +123,7 @@ export async function POST(request: Request) {
     return apiError("internal", "Could not create the request.");
   }
 }
+
+export const GET = guarded(handleGET);
+
+export const POST = guarded(handlePOST);

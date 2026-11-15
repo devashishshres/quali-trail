@@ -86,6 +86,8 @@ export const ApiError = z.object({
       "memory_unavailable",
       "rate_limited",
       "onboarding_required",
+      /** Setup on the server is incomplete (for example the rate limiter isn't installed). Not the caller's fault. */
+      "unavailable",
       "internal",
     ]),
     message: z.string(),

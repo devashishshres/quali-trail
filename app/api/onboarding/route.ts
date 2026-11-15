@@ -4,7 +4,7 @@ import { configProblems, describeProblems } from "@/lib/server/config";
 import { allowedRoles } from "@/lib/server/accounts/roles";
 import { addSampleOpportunity } from "@/lib/server/accounts/sample";
 import { logSignoffError } from "@/lib/server/signoff/redact";
-import { allow, rpc } from "@/lib/server/signoff/service";
+import { allow, guarded, rpc } from "@/lib/server/signoff/service";
 import { OnboardRequest } from "@/lib/types";
 
 const REFUSED = {
@@ -19,7 +19,7 @@ const REFUSED = {
  * existing technician profile, and only while supervisor review is on. Creates no evidence; a sample job is
  * added only when explicitly requested.
  */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const a = await getAccount();
   if (!a) return apiError("unauthorized", "Sign in first.");
   if (!a.user.emailConfirmed || !a.user.email) return apiError("forbidden", "Confirm your email address first.");
@@ -52,3 +52,5 @@ export async function POST(request: Request) {
     return apiError("internal", "Couldn't save your profile. Please try again.");
   }
 }
+
+export const POST = guarded(handlePOST);

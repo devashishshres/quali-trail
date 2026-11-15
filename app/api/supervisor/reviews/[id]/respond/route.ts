@@ -5,7 +5,7 @@ import { supervisorReviewEnabled } from "@/lib/server/accounts/flags";
 import { notifyReviewDecided } from "@/lib/server/accounts/notify";
 import { REVIEW_STATEMENT_VERSION } from "@/lib/server/accounts/review-text";
 import { logSignoffError } from "@/lib/server/signoff/redact";
-import { allow, rpc } from "@/lib/server/signoff/service";
+import { allow, guarded, rpc } from "@/lib/server/signoff/service";
 import { ReviewRespondRequest } from "@/lib/types";
 
 const MESSAGE: Record<string, string> = {
@@ -22,7 +22,7 @@ const MESSAGE: Record<string, string> = {
 };
 
 /** POST /api/supervisor/reviews/:id/respond — the only way a review decision is recorded. */
-export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
+async function handlePOST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const s = await getSupervisorContext();
   if (!s) return apiError("unauthorized", "Sign in with a confirmed reviewer account.");
   if (!supervisorReviewEnabled()) return apiError("not_found", "Supervisor review isn't available.");
@@ -49,3 +49,5 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
   return ok({ recorded: true, repeated: r.repeated === true, status: r.status });
 }
+
+export const POST = guarded(handlePOST);

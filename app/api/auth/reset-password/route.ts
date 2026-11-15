@@ -1,12 +1,12 @@
 import { apiError, fieldErrors, ok } from "@/lib/api/responses";
 import { clearRecoveryMarker, recoveryMarkerValid } from "@/lib/server/accounts/recovery";
 import { logSignoffError } from "@/lib/server/signoff/redact";
-import { allow } from "@/lib/server/signoff/service";
+import { allow, guarded } from "@/lib/server/signoff/service";
 import { createUserClient } from "@/lib/supabase/server";
 import { ResetPasswordRequest } from "@/lib/types";
 
 /** GET /api/auth/reset-password — may this browser set a new password right now? Changes nothing. */
-export async function GET() {
+async function handleGET() {
   const { data } = await (await createUserClient()).auth.getUser();
   return ok({ ready: Boolean(data.user && (await recoveryMarkerValid(data.user.id))) });
 }
@@ -16,7 +16,7 @@ export async function GET() {
  * reset link AND the 15-minute reset permission /auth/confirm set for that same user. Afterwards every other
  * session of the account is signed out.
  */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const supabase = await createUserClient();
   const { data, error: userError } = await supabase.auth.getUser();
   if (userError || !data.user) return apiError("unauthorized", "This reset link has expired. Request a new one.");
@@ -36,3 +36,7 @@ export async function POST(request: Request) {
   await supabase.auth.signOut({ scope: "others" }).catch(() => undefined);
   return ok({ changed: true });
 }
+
+export const GET = guarded(handleGET);
+
+export const POST = guarded(handlePOST);
