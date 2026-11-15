@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { getAuthedContext } from "@/lib/api/auth";
 import { apiError, ok } from "@/lib/api/responses";
-import { mailMode } from "@/lib/server/signoff/config";
-import { OUTBOX_PATH } from "@/lib/server/signoff/mailer";
+import { mockOutboxAllowed } from "@/lib/server/email/config";
+import { OUTBOX_PATH } from "@/lib/server/email/transport";
 import { redact } from "@/lib/server/signoff/redact";
 
 /**
@@ -14,16 +14,18 @@ import { redact } from "@/lib/server/signoff/redact";
 export async function GET() {
   const ctx = await getAuthedContext();
   if (!ctx) return apiError("unauthorized", "Sign in first.");
-  if (mailMode() !== "mock" || process.env.NODE_ENV === "production") return apiError("not_found", "Not available.");
+  if (!mockOutboxAllowed()) return apiError("not_found", "Not available.");
   const text = await readFile(OUTBOX_PATH, "utf8").catch(() => "");
   const messages = text
     .split("\n")
     .filter(Boolean)
     .flatMap((line) => {
       try {
-        const m = JSON.parse(line) as { simulated: boolean; at: string; kind: string; subject: string; text: string; meta?: { workerId?: string } };
-        return m.meta?.workerId === ctx.worker.id && m.kind === "invitation"
-          ? [{ simulated: true, at: m.at, kind: m.kind, subject: m.subject, text: redact(m.text).replace(/https?:\/\/\S+/g, "[link withheld]") }]
+        const m = JSON.parse(line) as { at: string; subject: string; text: string; meta?: { workerId?: string; kind?: string } };
+        const kind = m.meta?.kind;
+        // Only messages the worker caused to be sent to someone else, minus anything secret. Never codes.
+        return m.meta?.workerId === ctx.worker.id && (kind === "customer_invitation" || kind === "reminder" || kind === "supervisor_invitation" || kind === "review_notification")
+          ? [{ simulated: true, at: m.at, kind, subject: m.subject, text: redact(m.text).replace(/https?:\/\/\S+/g, "[link withheld]") }]
           : [];
       } catch {
         return [];

@@ -15,9 +15,9 @@ describe("worker simulated outbox", () => {
     await writeFile(
       join(dir, ".signoff-outbox/outbox.jsonl"),
       [
-        line({ kind: "invitation", to: "casey@example.test", subject: "[SIMULATED] invite", text: "Open http://localhost:3000/signoff#t=" + "a".repeat(43), meta: { workerId: "w-1" } }),
-        line({ kind: "code", to: "casey@example.test", subject: "[SIMULATED] code", text: "Your code is: 482913", meta: { workerId: "w-1" } }),
-        line({ kind: "invitation", to: "other@example.test", subject: "other worker", text: "x", meta: { workerId: "w-2" } }),
+        line({ to: "casey@example.test", subject: "[SIMULATED] invite", text: "Open http://localhost:3000/signoff#t=" + "a".repeat(43), meta: { kind: "customer_invitation", workerId: "w-1" } }),
+        line({ to: "casey@example.test", subject: "[SIMULATED] code", text: "Your code is: 482913", meta: { kind: "customer_code", workerId: "w-1" } }),
+        line({ to: "other@example.test", subject: "other worker", text: "x", meta: { kind: "customer_invitation", workerId: "w-2" } }),
       ].join("\n") + "\n",
     );
     process.chdir(dir);
@@ -30,7 +30,7 @@ describe("worker simulated outbox", () => {
     const body = await (await GET()).json();
     const text = JSON.stringify(body);
     expect(body.messages).toHaveLength(1);
-    expect(body.messages[0].kind).toBe("invitation");
+    expect(body.messages[0].kind).toBe("customer_invitation");
     expect(text).not.toContain("482913");
     expect(text).not.toContain("#t=");
     expect(text).not.toContain("casey@");

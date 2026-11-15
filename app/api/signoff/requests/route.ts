@@ -4,7 +4,8 @@ import { apiError, fieldErrors, ok } from "@/lib/api/responses";
 import { createUserClient } from "@/lib/supabase/server";
 import { signoffStatus } from "@/lib/server/signoff/config";
 import { hmac, maskEmail, newToken, normalizeEmail } from "@/lib/server/signoff/crypto";
-import { invitationMessage, sendMessage } from "@/lib/server/signoff/mailer";
+import { DELIVERY_FAILURE_MESSAGE, deliver } from "@/lib/server/email/deliver";
+import { templates } from "@/lib/server/email/templates";
 import { logSignoffError } from "@/lib/server/signoff/redact";
 import { allow, appBaseUrl, featureOn, rpc } from "@/lib/server/signoff/service";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -104,13 +105,17 @@ export async function POST(request: Request) {
     const requestId = String(created.id);
     const base = appBaseUrl();
     const link = `${base}/signoff#t=${token}`;
-    const mail = invitationMessage({ workerName: ctx.worker.name, link, base, validDays: VALID_DAYS, mock: status.mode === "mock" });
-    try {
-      await sendMessage({ kind: "invitation", to: email, ...mail, idempotencyKey: `invite-${requestId}-1`, meta: { workerId: ctx.worker.id, requestId } });
-    } catch (e) {
-      logSignoffError("send-invitation", e);
+    const sent = await deliver({
+      kind: "customer_invitation",
+      to: email,
+      rendered: templates.customerInvitation({ base, mock: status.mode === "mock", workerName: ctx.worker.name, link, validDays: VALID_DAYS }),
+      idempotencyKey: `invite-${requestId}-1`,
+      related: { type: "signoff_request", id: requestId },
+      workerId: ctx.worker.id,
+    });
+    if (!sent.ok) {
       await rpc("signoff_revoke_request", { p_worker: ctx.worker.id, p_request: requestId });
-      return apiError("internal", "The invitation couldn't be sent, so the request was cancelled. Please try again.");
+      return apiError("internal", `${DELIVERY_FAILURE_MESSAGE[sent.reason]} The request was cancelled so nothing is left half-sent.`);
     }
     return ok({ id: requestId, mode: status.mode }, 201);
   } catch (e) {

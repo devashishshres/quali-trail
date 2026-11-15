@@ -239,6 +239,8 @@ describe.skipIf(!ADMIN_URL)("customer sign-off (database)", () => {
     const r = await create(await addEvidence());
     const s = await verified(r);
     const newToken = sha("new-token");
+    expect((await fn(db, "signoff_rotate_token", [WORKER, r.id, newToken])).reason).toBe("too_soon"); // reminders are spaced
+    await db.query("update public.signoff_requests set last_invited_at = now() - interval '2 hours' where id=$1", [r.id]);
     expect((await fn(db, "signoff_rotate_token", [WORKER, r.id, newToken])).ok).toBe(true);
     expect((await fn(db, "signoff_gate", [r.hash])).ok).toBe(false);
     expect((await fn(db, "signoff_read_snapshot", [newToken, s])).ok).toBe(false);

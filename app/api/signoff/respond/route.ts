@@ -1,4 +1,6 @@
 import { STATEMENT_VERSION } from "@/lib/server/signoff/statement";
+import { notifyCustomerDecision } from "@/lib/server/signoff/notify";
+import { logSignoffError } from "@/lib/server/signoff/redact";
 import { allow, clientIp, featureOn, gone, json, off, rpc, sessionHash, tokenHash, tooMany } from "@/lib/server/signoff/service";
 import { RespondRequest } from "@/lib/types";
 
@@ -27,7 +29,16 @@ export async function POST(request: Request) {
     p_comment: d.decision === "request_correction" ? d.comment : null,
     p_statement_version: STATEMENT_VERSION,
   });
-  if (r.ok) return json({ recorded: true, repeated: r.repeated === true });
+  if (r.ok) {
+    if (r.repeated !== true) {
+      // Receipts are best-effort: the decision is already recorded and is never undone by an email failure.
+      await notifyCustomerDecision({
+        requestId: String(r.requestId), workerId: String(r.workerId), status: String(r.status),
+        title: String(r.title), workerName: String(r.workerName), deliveryMode: String(r.deliveryMode),
+      }).catch((e) => logSignoffError("receipt", e));
+    }
+    return json({ recorded: true, repeated: r.repeated === true });
+  }
   const reason = String(r.reason);
   if (CLOSED[reason]) return json({ error: { code: "forbidden", message: CLOSED[reason], reason } }, 409);
   return gone();
