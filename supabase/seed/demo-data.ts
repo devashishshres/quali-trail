@@ -1,5 +1,5 @@
 /**
- * Fictional demo dataset for InstallerOS. ALL PEOPLE, EMPLOYERS,
+ * Fictional demo dataset for QualiTrail. ALL PEOPLE, EMPLOYERS,
  * ISSUERS AND NUMBERS HERE ARE INVENTED. Every row is is_synthetic = true.
  *
  * Expected first match run (before the demo upload):
@@ -18,7 +18,7 @@ import type {
   VerificationStatus,
 } from "../../lib/types";
 
-export const DEMO_USER_EMAIL = "alex.morgan@demo.installeros.dev";
+export const DEMO_USER_EMAIL = "alex.morgan@demo.qualitrail.dev";
 
 export const DEMO_WORKER = {
   id: "a0000000-0000-4000-8000-000000000001",
@@ -130,7 +130,7 @@ export const DEMO_OPPORTUNITY = {
   title: "Heat-Pump Installation Technician",
   employer: "Demo HVAC Company (fictional)",
   description:
-    "Fictional job posting for the InstallerOS demo. Install, start up and commission residential air-source heat pumps.",
+    "Fictional job posting for the QualiTrail demo. Install, start up and commission residential air-source heat pumps.",
   sourceUrl: null,
 } as const;
 

@@ -10,7 +10,7 @@ const barlowCondensed = Barlow_Condensed({
 });
 
 export const metadata: Metadata = {
-  title: { default: "InstallerOS", template: "%s | InstallerOS" },
+  title: { default: "QualiTrail", template: "%s | QualiTrail" },
   description: "Your experience. Recognized. Portable.",
 };
 

@@ -148,7 +148,7 @@ function MemoryHighlight() {
       {data.error && <p className="mt-2 text-sm text-white/70">Couldn&apos;t load match results: {data.error.message}</p>}
       {data.status === "ready" && !found && (
         <p className="mt-2 text-sm text-white/75">
-          Run matching on a job and InstallerOS will show which older records resurface for its requirements.
+          Run matching on a job and QualiTrail will show which older records resurface for its requirements.
         </p>
       )}
       {found && data.data && (

@@ -44,7 +44,7 @@ export function ErrorNotice({ error, onRetry }: { error: ApiRequestError; onRetr
   return (
     <Notice
       tone="danger"
-      title={error.missingEndpoint ? "This part of InstallerOS isn't connected yet" : "Couldn't load this"}
+      title={error.missingEndpoint ? "This part of QualiTrail isn't connected yet" : "Couldn't load this"}
       action={
         onRetry && (
           <button className="btn btn-secondary" onClick={onRetry}>

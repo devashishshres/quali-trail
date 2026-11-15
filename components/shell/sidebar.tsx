@@ -15,7 +15,7 @@ const NAV: { href: string; label: string; icon: IconName }[] = [
 function Wordmark() {
   return (
     <Link href="/passport" className="font-display text-2xl font-bold tracking-tight text-white">
-      Installer<span className="text-orange">OS</span>
+      Quali<span className="text-orange">Trail</span>
     </Link>
   );
 }
