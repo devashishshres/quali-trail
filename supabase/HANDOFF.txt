@@ -149,3 +149,35 @@ REHEARSAL DOCUMENT ATTRIBUTION (branch fix/rehearsal-document-attribution)
 Problem: rehearsal workers had their own database ids but received PDFs naming Alex Morgan (and Alex's certificate numbers), and the live-upload checklist named Alex.
 Fix (code only; nothing live was changed): supabase/seed/demo-documents.ts generates each worker's PDFs from the worker's name and slug, with deterministic worker-specific certificate numbers; files go in files/<slug>/ and upload/<slug>/; Alex's top-level originals are byte-identical to before (tested). seed-demo.ts runs supabase/seed/attribution.ts first (names, identifiers, stored metadata vs printed text) and stops before writing if anything is inconsistent, uploads the worker's own files hashed from their actual bytes, and prints the exact checklist path to upload.
 Existing live records needing repair (NOT repaired): Jordan Rivera (rehearsal-1) has three stored originals naming Alex Morgan (EPA card, training certificate, and the live-uploaded commissioning checklist), credential numbers copied from Alex on the EPA and training records, extracted metadata on the checklist that names Alex, and Supermemory documents built from that metadata. Sam Okafor (rehearsal-2) has not been seeded. Preferred demo approach: seed rehearsal-2 fresh with the corrected documents.
+
+
+REHEARSAL-2 (SAM OKAFOR) — RESERVED FOR THE LIVE DEMONSTRATION
+--------------------------------------------------------------
+Status as of 2026-11-14: seeded and indexed in development project ighnwgkqvajfkhmopttg, sitting at the 2-of-4 baseline. The commissioning checklist has NOT been uploaded. Do not sign in as this account for experiments, upload anything, or re-seed it before the demonstration. If it is consumed or damaged, create rehearsal-3 with a new name and email (README, "Demo data").
+
+Code: PR #4 (merge commit 0a2a38f) added per-worker rehearsal documents and the attribution check. The seed was run from that merged code.
+
+Seeded state
+- Worker: Sam Okafor (fictional, synthetic), slug rehearsal-2, account sam.okafor@demo.qualitrail.dev, the shared demo password from the local environment (never recorded in the repository).
+- Rows: 1 worker, 4 evidence records, 1 opportunity, 4 requirements, with ids derived from the slug (no overlap with Alex Morgan's fixed ids or Jordan's).
+- Originals (private storage, under Sam's own folder): EPA Section 608 certification and manufacturer training certificate. Both name Sam Okafor, mention no other person, and their stored file hashes match the stored bytes.
+- Certificate numbers (his own, printed on his documents and stored on his records): EPA DEMO-608-945897; training NW-TRN-2025-0314-0D1464. Neither is Alex's.
+- The two work records are self-reported and have no original file, as designed.
+- Supermemory: all four records indexed under qualitrail_our_version_worker_<Sam's id>.
+
+Baseline verified in a browser (production build, development project)
+- Passport shows Sam, the fictional label and his summary; no Alex or Jordan anywhere.
+- Both source links return real PDFs naming Sam.
+- One saved match run: 2 evidence found (EPA 608; manufacturer training), 1 needs review (installation/startup), 1 no sufficient evidence (commissioning checklist).
+- Printable packet shows the summary (labelled the worker's own, not verified), the Issuer column, verification labels separate from assessment, "Current when generated" and the disclaimer. No console errors or failed requests (the only 404s are the expected "no run yet" lookups before the first run).
+
+Correct checklist for the live demonstration
+  /Users/tharunvimalaa/sun-hacks-26/supabase/seed/upload/rehearsal-2/demo-commissioning-checklist.pdf
+It names Sam Okafor. This file is generated locally and git-ignored, so it exists only on the machine that generated it; regenerate with
+  DEMO_WORKER_SLUG=rehearsal-2 DEMO_WORKER_NAME="Sam Okafor" npm run seed:pdfs
+The top-level supabase/seed/upload/demo-commissioning-checklist.pdf is Alex Morgan's: do not upload it for Sam.
+Expected after the upload (save, wait for "Searchable in memory", then "Run matching again"): 3 evidence found, 1 needs review (installation/startup), 0 no sufficient evidence. Sam's baseline run goes stale once the new record is saved.
+
+Excluded from judging: Jordan Rivera (rehearsal-1). Seeded before per-worker documents existed, so three stored originals (EPA card, training certificate, live-uploaded checklist) name Alex Morgan, two credential numbers were copied from Alex, the checklist's extracted metadata names Alex, and Supermemory documents were built from that metadata. He also already shows 3 of 4. Not repaired.
+
+Still pending: migration-history repair (recorded versions must be read through a database or CLI connection first), deployment, key rotation, authentication/account settings.
