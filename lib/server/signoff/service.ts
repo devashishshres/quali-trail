@@ -53,9 +53,23 @@ export async function allow(kind: string, rawKey: string, windowSeconds: number,
   return !r.error && r.data === true;
 }
 
+/**
+ * The client address used ONLY as a rate-limit key (hashed, never stored raw).
+ * Forwarded headers are trusted only on the supported host, Vercel, whose edge overwrites `x-real-ip` and
+ * `x-forwarded-for` with the connecting address, so a client cannot choose its own value.
+ * Anywhere else (local, or an unsupported host) forwarded headers are ignored and every caller shares one bucket:
+ * stricter, never spoofable. Supporting another host means adding its trusted header here deliberately.
+ */
+export function clientIpFrom(h: Pick<Headers, "get">, env: NodeJS.ProcessEnv = process.env): string {
+  if (env.VERCEL === "1") {
+    const ip = h.get("x-real-ip") ?? h.get("x-forwarded-for")?.split(",")[0];
+    if (ip && ip.trim()) return `vercel:${ip.trim()}`;
+  }
+  return "untrusted-shared";
+}
+
 export async function clientIp(): Promise<string> {
-  const h = await headers();
-  return (h.get("x-forwarded-for")?.split(",")[0] ?? h.get("x-real-ip") ?? "unknown").trim();
+  return clientIpFrom(await headers());
 }
 
 /** Customer requests identify the invitation by an `x-signoff-token` header (the link fragment never reaches a server). */

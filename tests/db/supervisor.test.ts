@@ -132,8 +132,42 @@ describe.skipIf(!ADMIN_URL)("accounts and supervisor review (database)", () => {
     expect(ok).toMatchObject({ ok: true, status: "accepted" });
     const row = (await db.query("select invited_email, token_hash, email_hint from public.supervisor_relationships where id=$1", [ok.relationshipId])).rows[0];
     expect(row).toEqual({ invited_email: null, token_hash: null, email_hint: "x***" }); // address dropped, link dead
-    expect((await fn(db, "sup_invite_answer", [inv.token, s.auth, true])).ok).toBe(false); // the link no longer works
+    // The live token is gone; only a consumed hash remains, which reports back to the same account and nobody else.
+    expect((await db.query("select count(*)::int n from public.supervisor_relationships where token_hash=$1", [inv.token])).rows[0].n).toBe(0);
+    expect(await fn(db, "sup_invite_answer", [inv.token, s.auth, true])).toMatchObject({ ok: true, status: "accepted", repeated: true, relationshipId: ok.relationshipId });
+    expect((await fn(db, "sup_invite_answer", [inv.token, s.auth, false])).reason).toBe("accepted"); // can't flip to declined via the link
+    expect((await fn(db, "sup_invite_answer", [inv.token, stranger.auth, true])).reason).toBe("accepted"); // forwarded after acceptance: nothing
+    expect(await fn(db, "sup_invite_peek", [inv.token])).toMatchObject({ ok: true, status: "accepted", answered: true, workerName: null, emailHint: null });
+    expect((await db.query("select count(*)::int n from public.supervisor_relationships where worker_id=$1 and status='accepted'", [w.id])).rows[0].n).toBe(1);
     expect((await invite(w, s.email)).reason).toBe("already_connected");
+  });
+
+  it("a repeated decline is recognised; ending the relationship clears the consumed hash", async () => {
+    const w = await worker("Vale");
+    const s = await supervisor("Wynn");
+    const inv = await invite(w, s.email);
+    expect(await fn(db, "sup_invite_answer", [inv.token, s.auth, false])).toMatchObject({ ok: true, status: "declined" });
+    expect(await fn(db, "sup_invite_answer", [inv.token, s.auth, false])).toMatchObject({ ok: true, status: "declined", repeated: true });
+    expect((await fn(db, "sup_invite_answer", [inv.token, s.auth, true])).reason).toBe("declined");
+    const inv2 = await invite(w, s.email);
+    expect((await fn(db, "sup_invite_answer", [inv2.token, s.auth, true])).ok).toBe(true);
+    await fn(db, "sup_relationship_revoke", [w.auth, inv2.id]);
+    expect((await db.query("select consumed_token_hash from public.supervisor_relationships where id=$1", [inv2.id])).rows[0].consumed_token_hash).toBeNull();
+    expect((await fn(db, "sup_invite_answer", [inv2.token, s.auth, true])).reason).toBe("invalid");
+  });
+
+  it("the original document is shared only when the worker chooses to share it", async () => {
+    const w = await worker("Xan");
+    const s = await supervisor("Yew");
+    const rel = await connect(w, s);
+    const notShared = await fn(db, "review_create", [w.id, await job(w, { storage: "fictional/private.pdf" }), rel, 30, false]);
+    expect((await db.query("select has_original from public.review_requests where id=$1", [notShared.id])).rows[0].has_original).toBe(false);
+    expect(await svcText(db, "review_document_path", [s.auth, notShared.id])).toBeNull();
+    expect((await fn(db, "review_get", [s.auth, notShared.id])).hasOriginal).toBe(false);
+    expect((await fn(db, "review_respond", [s.auth, notShared.id, "confirm_documents_reviewed", null, null, "v1"])).reason).toBe("no_document");
+    // Asking to share when there is no document shares nothing.
+    const noDoc = await fn(db, "review_create", [w.id, await job(w), rel, 30, true]);
+    expect((await db.query("select has_original from public.review_requests where id=$1", [noDoc.id])).rows[0].has_original).toBe(false);
   });
 
   it("a worker can't be their own supervisor even through a hand-made relationship", async () => {
@@ -154,12 +188,12 @@ describe.skipIf(!ADMIN_URL)("accounts and supervisor review (database)", () => {
     const rel12 = await connect(w1, s2);
     const j1 = await job(w1);
     const j2 = await job(w2);
-    const q11 = await fn(db, "review_create", [w1.id, j1, rel11, 30]);
-    const q21 = await fn(db, "review_create", [w2.id, j2, rel21, 30]);
+    const q11 = await fn(db, "review_create", [w1.id, j1, rel11, 30, false]);
+    const q21 = await fn(db, "review_create", [w2.id, j2, rel21, 30, false]);
     expect(q11.ok && q21.ok).toBe(true);
     // A worker can't use another worker's relationship or record.
-    expect((await fn(db, "review_create", [w1.id, j1, rel21, 30])).reason).toBe("no_relationship");
-    expect((await fn(db, "review_create", [w1.id, j2, rel11, 30])).reason).toBe("not_found");
+    expect((await fn(db, "review_create", [w1.id, j1, rel21, 30, false])).reason).toBe("no_relationship");
+    expect((await fn(db, "review_create", [w1.id, j2, rel11, 30, false])).reason).toBe("not_found");
 
     const s1list = (await fn(db, "review_list_for_supervisor", [s1.auth])) as unknown as { id: string }[];
     expect(s1list.map((x) => x.id).sort()).toEqual([q11.id, q21.id].sort());
@@ -174,20 +208,20 @@ describe.skipIf(!ADMIN_URL)("accounts and supervisor review (database)", () => {
     const w = await worker("Elm");
     const s = await supervisor("Fir");
     const rel = await connect(w, s);
-    expect((await fn(db, "review_create", [w.id, await job(w, { type: "certification" }), rel, 30])).reason).toBe("unsupported_type");
+    expect((await fn(db, "review_create", [w.id, await job(w, { type: "certification" }), rel, 30, false])).reason).toBe("unsupported_type");
     const pending = await job(w);
     await db.query("update public.evidence set verification_status='pending_review' where id=$1", [pending]);
-    expect((await fn(db, "review_create", [w.id, pending, rel, 30])).reason).toBe("not_eligible");
+    expect((await fn(db, "review_create", [w.id, pending, rel, 30, false])).reason).toBe("not_eligible");
     const j = await job(w, { type: "checklist" });
-    expect((await fn(db, "review_create", [w.id, j, rel, 30])).ok).toBe(true);
-    expect((await fn(db, "review_create", [w.id, j, rel, 30])).reason).toBe("duplicate_open");
+    expect((await fn(db, "review_create", [w.id, j, rel, 30, false])).ok).toBe(true);
+    expect((await fn(db, "review_create", [w.id, j, rel, 30, false])).reason).toBe("duplicate_open");
   });
 
   it("decisions record exact scope; tasks must come from the snapshot; documents only when one exists", async () => {
     const w = await worker("Gale");
     const s = await supervisor("Hale");
     const rel = await connect(w, s);
-    const noDoc = await fn(db, "review_create", [w.id, await job(w), rel, 30]);
+    const noDoc = await fn(db, "review_create", [w.id, await job(w), rel, 30, false]);
     expect((await fn(db, "review_respond", [s.auth, noDoc.id, "confirm_observed", JSON.stringify([]), null, "v1"])).reason).toBe("tasks_required");
     expect((await fn(db, "review_respond", [s.auth, noDoc.id, "confirm_observed", JSON.stringify(["Installed solar panels"]), null, "v1"])).reason).toBe("unknown_task");
     expect((await fn(db, "review_respond", [s.auth, noDoc.id, "confirm_observed", JSON.stringify(["Brazed line set", "Brazed line set"]), null, "v1"])).reason).toBe("unknown_task");
@@ -199,7 +233,7 @@ describe.skipIf(!ADMIN_URL)("accounts and supervisor review (database)", () => {
     expect(resp.observed_tasks).toEqual(["Pulled vacuum to 500 microns"]);
     expect(resp.reviewer_name).toBe("Hale (fictional)");
 
-    const withDoc = await fn(db, "review_create", [w.id, await job(w, { storage: "fictional/doc.pdf" }), rel, 30]);
+    const withDoc = await fn(db, "review_create", [w.id, await job(w, { storage: "fictional/doc.pdf" }), rel, 30, true]);
     expect((await fn(db, "review_respond", [s.auth, withDoc.id, "confirm_documents_reviewed", null, null, "v1"])).status).toBe("confirmed_documents");
   });
 
@@ -207,7 +241,7 @@ describe.skipIf(!ADMIN_URL)("accounts and supervisor review (database)", () => {
     const w = await worker("Iris");
     const s = await supervisor("Jade");
     const rel = await connect(w, s);
-    const q = await fn(db, "review_create", [w.id, await job(w), rel, 30]);
+    const q = await fn(db, "review_create", [w.id, await job(w), rel, 30, false]);
     const tasks = JSON.stringify(["Brazed line set"]);
     const cs = await Promise.all([newClient(), newClient(), newClient(), newClient()]);
     const out = await Promise.all(cs.map((c, i) => fn(c, "review_respond", [s.auth, q.id, i % 2 ? "confirm_observed" : "decline", i % 2 ? tasks : null, null, "v1"])));
@@ -224,9 +258,9 @@ describe.skipIf(!ADMIN_URL)("accounts and supervisor review (database)", () => {
     const w = await worker("Kai");
     const s = await supervisor("Lark");
     const rel = await connect(w, s);
-    const done = await fn(db, "review_create", [w.id, await job(w), rel, 30]);
+    const done = await fn(db, "review_create", [w.id, await job(w), rel, 30, false]);
     await fn(db, "review_respond", [s.auth, done.id, "decline", null, "Not on that job", "v1"]);
-    const pending = await fn(db, "review_create", [w.id, await job(w), rel, 30]);
+    const pending = await fn(db, "review_create", [w.id, await job(w), rel, 30, false]);
     const other = await worker("Other");
     expect((await fn(db, "sup_relationship_revoke", [other.auth, rel])).reason).toBe("not_found"); // a stranger can't revoke
     expect(await fn(db, "sup_relationship_revoke", [w.auth, rel])).toMatchObject({ ok: true, closedReviews: 1 });
@@ -236,7 +270,7 @@ describe.skipIf(!ADMIN_URL)("accounts and supervisor review (database)", () => {
     expect((await fn(db, "review_get", [s.auth, done.id])).reason).toBe("not_found");
     // History kept for the worker.
     expect((await db.query("select count(*)::int n from public.review_responses where request_id=$1", [done.id])).rows[0].n).toBe(1);
-    expect((await fn(db, "review_create", [w.id, await job(w), rel, 30])).reason).toBe("no_relationship");
+    expect((await fn(db, "review_create", [w.id, await job(w), rel, 30, false])).reason).toBe("no_relationship");
     // The supervisor can also end it (on a fresh relationship).
     const rel2 = await connect(w, s);
     expect((await fn(db, "sup_relationship_revoke", [s.auth, rel2])).ok).toBe(true);
@@ -247,7 +281,7 @@ describe.skipIf(!ADMIN_URL)("accounts and supervisor review (database)", () => {
     const s = await supervisor("Nash");
     const rel = await connect(w, s);
     const e = await job(w, { storage: "fictional/x.pdf" });
-    const q = await fn(db, "review_create", [w.id, e, rel, 30]);
+    const q = await fn(db, "review_create", [w.id, e, rel, 30, true]);
     expect((await svcText(db, "review_document_path", [s.auth, q.id]))).toBe("fictional/x.pdf");
     const stranger = await supervisor("Other2");
     expect(await svcText(db, "review_document_path", [stranger.auth, q.id])).toBeNull();
@@ -262,7 +296,7 @@ describe.skipIf(!ADMIN_URL)("accounts and supervisor review (database)", () => {
     const s = await supervisor("Pine");
     const rel = await connect(w, s);
     const e = await job(w, { storage: "fictional/y.pdf" });
-    const q = await fn(db, "review_create", [w.id, e, rel, 30]);
+    const q = await fn(db, "review_create", [w.id, e, rel, 30, true]);
     await fn(db, "review_respond", [s.auth, q.id, "confirm_documents_reviewed", null, null, "v1"]);
     await expect(db.query("update public.review_requests set snapshot='{}' where id=$1", [q.id])).rejects.toThrow(/immutable/);
     await expect(db.query("update public.review_requests set status='declined' where id=$1", [q.id])).rejects.toThrow(/cannot change/);

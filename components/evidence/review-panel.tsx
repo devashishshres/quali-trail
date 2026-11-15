@@ -13,6 +13,7 @@ export function ReviewPanel({ evidence: e }: { evidence: Evidence }) {
   const [supervisors, setSupervisors] = useState<WorkerRelationship[]>([]);
   const [reviews, setReviews] = useState<WorkerReview[]>([]);
   const [busy, setBusy] = useState(false);
+  const [shareOriginal, setShareOriginal] = useState(false);
   const [message, setMessage] = useState<{ tone: "danger" | "info"; text: string } | null>(null);
 
   const refresh = useCallback(async () => {
@@ -75,7 +76,7 @@ export function ReviewPanel({ evidence: e }: { evidence: Evidence }) {
           onSubmit={(ev) => {
             ev.preventDefault();
             const rel = String(new FormData(ev.currentTarget).get("relationship"));
-            void act(() => accountsApi.requestReview(e.id, rel), "Sent. It's waiting in their QualiTrail reviews.");
+            void act(() => accountsApi.requestReview(e.id, rel, e.sourceAvailable && shareOriginal), "Sent. It's waiting in their QualiTrail reviews.");
           }}
         >
           <label className="block"><span className="mb-1 block text-sm font-semibold">Supervisor</span>
@@ -83,6 +84,25 @@ export function ReviewPanel({ evidence: e }: { evidence: Evidence }) {
               {available.map((s) => <option key={s.id} value={s.id}>{s.supervisorName ?? s.emailHint}</option>)}
             </select>
           </label>
+          <div className="w-full space-y-2 rounded-md border border-line bg-paper p-3 text-sm" data-testid="review-sharing">
+            <p className="font-semibold">What the supervisor will see</p>
+            <p>The details saved in this record (title, date, tasks, equipment and summary), frozen as they are now.</p>
+            {e.sourceAvailable ? (
+              <>
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" name="shareOriginal" checked={shareOriginal} onChange={(x) => setShareOriginal(x.target.checked)} className="mt-1" />
+                  <span>Also let them open the original PDF you uploaded, while the request is open.</span>
+                </label>
+                <p className="text-slate">
+                  {shareOriginal
+                    ? "The PDF will be shared as it is. It may contain customer names, addresses, phone numbers or other details. Check it before sending."
+                    : "The PDF will not be shared. They can still confirm tasks they observed, but not that they reviewed the document."}
+                </p>
+              </>
+            ) : (
+              <p className="text-slate">This record has no uploaded document, so nothing else is shared.</p>
+            )}
+          </div>
           <button className="btn btn-secondary" disabled={busy}>{busy ? "Sending…" : "Ask for review"}</button>
         </form>
       ) : null}

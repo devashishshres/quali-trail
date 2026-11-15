@@ -1,7 +1,8 @@
 import { apiError, fieldErrors, ok } from "@/lib/api/responses";
 import { mayRegister, safeNext } from "@/lib/server/accounts/policy";
-import { hmac } from "@/lib/server/signoff/crypto";
-import { allow, clientIp, rpcValue } from "@/lib/server/signoff/service";
+import { hasPendingInvite } from "@/lib/server/accounts/roles";
+import { configProblems, describeProblems } from "@/lib/server/config";
+import { allow, clientIp } from "@/lib/server/signoff/service";
 import { logSignoffError } from "@/lib/server/signoff/redact";
 import { createUserClient } from "@/lib/supabase/server";
 import { SignupRequest } from "@/lib/types";
@@ -16,11 +17,16 @@ const SENT = "If this address can register, we've sent a confirmation link to it
 export async function POST(request: Request) {
   const body = SignupRequest.safeParse(await request.json().catch(() => null));
   if (!body.success) return apiError("validation_failed", "Check the highlighted fields.", fieldErrors(body.error));
+  const pepperProblem = configProblems().filter((p) => p.name === "SIGNOFF_PEPPER");
+  if (pepperProblem.length) {
+    logSignoffError("config", new Error(describeProblems(pepperProblem)));
+    return apiError("internal", "Sign-up isn't available on this server right now.");
+  }
   if (!(await allow("signup-ip", await clientIp(), 3600, 10))) return apiError("rate_limited", "Too many attempts. Please try again later.");
 
   const { email, password } = body.data;
-  const hasInvite = process.env.SIGNOFF_PEPPER ? (await rpcValue<boolean>("account_has_pending_invite", { p_email_hash: hmac("email", email) })) === true : false;
-  if (!mayRegister(email, hasInvite)) return ok({ message: SENT });
+  if (!(await allow("signup-email", email, 3600, 5))) return ok({ message: SENT });
+  if (!mayRegister(email, await hasPendingInvite(email))) return ok({ message: SENT });
 
   const base = (process.env.APP_BASE_URL ?? new URL(request.url).origin).replace(/\/+$/, "");
   const next = safeNext(body.data.next, "/onboarding");

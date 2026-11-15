@@ -14,7 +14,7 @@ import { safeNext } from "@/lib/server/accounts/policy";
  * This is an optimistic check: every API route still authorizes the caller itself.
  */
 
-const PUBLIC = ["/sign-in", "/sign-up", "/forgot-password", "/auth/", "/signoff", "/invite/"];
+const PUBLIC = ["/sign-in", "/sign-up", "/forgot-password", "/reset-password", "/auth/", "/signoff", "/invite/"];
 const WORKER_PAGES = ["/passport", "/evidence", "/opportunities", "/reports", "/supervisors", "/jobs"];
 /** Exact path or a sub-path ("/evidence", "/evidence/x"), never a longer sibling ("/evidencex"). */
 const startsWithAny = (path: string, list: string[]) =>
@@ -74,8 +74,8 @@ export async function proxy(request: NextRequest) {
     return redirect("/sign-in", path + request.nextUrl.search);
   }
 
-  // Customer and invitation pages, the confirmation callback and onboarding work for anyone signed in.
-  if (startsWithAny(path, ["/signoff", "/invite/", "/auth/", "/onboarding"])) return response;
+  // Customer and invitation pages, the email-link callback, password reset and onboarding work for anyone signed in.
+  if (startsWithAny(path, ["/signoff", "/invite/", "/auth/", "/onboarding", "/forgot-password", "/reset-password"])) return response;
 
   const [w, s] = await Promise.all([
     supabase.from("workers").select("id").eq("auth_user_id", data.user.id).maybeSingle(),

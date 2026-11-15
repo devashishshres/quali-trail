@@ -88,6 +88,7 @@ describe.skipIf(!ADMIN_URL)("customer routes (end to end, local database)", () =
     process.env.SIGNOFF_MAIL_MODE = "mock";
     process.env.SIGNOFF_PEPPER = "p".repeat(48);
     process.env.APP_BASE_URL = "http://localhost:3000";
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "http://127.0.0.1:54321"; // simulated email requires an isolated local setup
     const admin = new Client({ connectionString: ADMIN_URL });
     await admin.connect();
     await admin.query(`drop database if exists ${DB_NAME} with (force)`);

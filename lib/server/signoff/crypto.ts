@@ -5,7 +5,7 @@ import { createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto
  * are only ever stored or compared as HMAC-SHA256 digests keyed by SIGNOFF_PEPPER.
  * Each purpose has its own label so a hash from one context cannot be replayed in another.
  */
-export type HashPurpose = "token" | "code" | "session" | "email" | "ip" | "rate";
+export type HashPurpose = "token" | "code" | "session" | "email" | "ip" | "rate" | "recovery";
 
 export function pepper(env: NodeJS.ProcessEnv = process.env): string {
   const p = env.SIGNOFF_PEPPER;

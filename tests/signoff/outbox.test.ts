@@ -22,6 +22,8 @@ describe("worker simulated outbox", () => {
     );
     process.chdir(dir);
     process.env.SIGNOFF_MAIL_MODE = "mock";
+    process.env.APP_BASE_URL = "http://localhost:3000";
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "http://127.0.0.1:54321"; // simulated email requires an isolated local setup
   });
   afterAll(() => process.chdir(cwd));
 

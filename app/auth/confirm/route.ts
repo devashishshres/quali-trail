@@ -1,37 +1,52 @@
 import { NextResponse } from "next/server";
 import type { EmailOtpType } from "@supabase/supabase-js";
 import { safeNext } from "@/lib/server/accounts/policy";
+import { RESET_PATH, setRecoveryMarker } from "@/lib/server/accounts/recovery";
 import { createUserClient } from "@/lib/supabase/server";
 
 const OTP_TYPES: EmailOtpType[] = ["signup", "email", "recovery", "invite", "email_change", "magiclink"];
 
 /**
- * GET /auth/confirm — where Supabase confirmation and reset links land.
+ * GET /auth/confirm — where Supabase confirmation and password-reset links land.
  * Accepts either a PKCE `code` (default email templates) or `token_hash` + `type` (custom templates).
- * Redirects only to a same-site relative path. This route establishes the user's own session; it never
- * accepts or approves any review or acknowledgment.
+ * Redirects only to a same-site relative path. This route establishes the user's own session (and, for a reset
+ * link, a 15-minute reset permission for that user); it never accepts or approves any review or acknowledgment.
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const next = safeNext(url.searchParams.get("next"), "/onboarding");
+  const q = url.searchParams;
+  const tokenHash = q.get("token_hash");
+  const type = q.get("type") as EmailOtpType | null;
+  const recovery = type === "recovery" || safeNext(q.get("next"), "") === RESET_PATH;
+  const next = recovery ? RESET_PATH : safeNext(q.get("next"), "/onboarding");
   const to = (path: string) => NextResponse.redirect(new URL(path, url.origin), { headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
-  const supabase = await createUserClient();
+  const failed = (why: "expired" | "browser") =>
+    recovery ? to(`/forgot-password?error=${why}`) : to(`/sign-in?notice=${why === "expired" ? "expired" : "confirm"}&next=${encodeURIComponent(next)}`);
 
-  const code = url.searchParams.get("code");
-  const tokenHash = url.searchParams.get("token_hash");
-  const type = url.searchParams.get("type") as EmailOtpType | null;
+  // Supabase reports an expired or already-used link by redirecting here with an error instead of a code.
+  if (q.get("error") || q.get("error_code")) return failed("expired");
+
+  const supabase = await createUserClient();
+  const code = q.get("code");
   try {
+    let userId: string | null = null;
     if (code) {
-      const { error } = await supabase.auth.exchangeCodeForSession(code);
-      if (!error) return to(next);
+      const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+      if (error) return failed("browser");
+      userId = data.user?.id ?? null;
     } else if (tokenHash && type && OTP_TYPES.includes(type)) {
-      const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
-      if (!error) return to(type === "recovery" ? "/reset-password" : next);
+      const { data, error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
+      if (error) return failed("expired");
+      userId = data.user?.id ?? null;
+    } else {
+      return failed("expired");
     }
+    if (recovery) {
+      if (!userId) return failed("expired");
+      await setRecoveryMarker(userId);
+    }
+    return to(next);
   } catch {
-    // fall through
+    return failed("browser");
   }
-  // The link may have been opened in another browser (PKCE needs the original one). The email is usually
-  // confirmed regardless, so ask the person to sign in.
-  return to(`/sign-in?notice=confirm&next=${encodeURIComponent(next)}`);
 }
