@@ -7,6 +7,7 @@ import { FictionalTag, IndexStatus, VerificationTag } from "../ui/status";
 import { Icon } from "../ui/icons";
 import { EditForm } from "./edit-form";
 import { SignoffPanel } from "./signoff-panel";
+import { ReviewPanel } from "./review-panel";
 import { FIXTURE_MODE } from "@/lib/client/api";
 
 const SIGNOFF_TYPES = ["work_record", "checklist"];
@@ -108,6 +109,7 @@ function EvidenceItem({ evidence: e, onChanged }: { evidence: Evidence; onChange
           )}
           {editing && <EditForm evidence={e} onSaved={(saved) => { setEditing(false); onChanged(saved); }} onCancel={() => setEditing(false)} />}
           {canEdit && !editing && <SignoffPanel evidence={e} />}
+          {canEdit && !editing && <ReviewPanel evidence={e} />}
           {message && <p className="text-sm text-danger" role="alert">{message}</p>}
         </div>
       </details>

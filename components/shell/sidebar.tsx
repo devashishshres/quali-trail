@@ -2,19 +2,37 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { FIXTURE_MODE } from "@/lib/client/api";
+import { accountsApi } from "@/lib/client/accounts-api";
+import { useLoad } from "@/lib/client/use-load";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 import { Icon, type IconName } from "../ui/icons";
 
-const NAV: { href: string; label: string; icon: IconName }[] = [
+type NavItem = { href: string; label: string; icon: IconName };
+const WORKER_NAV: NavItem[] = [
   { href: "/passport", label: "Passport", icon: "passport" },
   { href: "/evidence", label: "My Evidence", icon: "evidence" },
   { href: "/opportunities", label: "Opportunities", icon: "briefcase" },
   { href: "/reports", label: "Reports", icon: "report" },
 ];
+const SUPERVISORS: NavItem = { href: "/supervisors", label: "Supervisors", icon: "people" };
+const REVIEWS: NavItem = { href: "/supervisor", label: "Reviews", icon: "clipboard" };
+
+/** Navigation follows the caller's own roles: technician, reviewer, or both. */
+function useNav(): NavItem[] {
+  const me = useLoad(() => (FIXTURE_MODE ? Promise.resolve(null) : accountsApi.me()));
+  if (FIXTURE_MODE) return WORKER_NAV;
+  const m = me.data;
+  if (!m) return [];
+  return [
+    ...(m.worker ? WORKER_NAV : []),
+    ...(m.worker && m.features.supervisorReview ? [SUPERVISORS] : []),
+    ...(m.supervisor ? [REVIEWS] : []),
+  ];
+}
 
 function Wordmark() {
   return (
-    <Link href="/passport" className="font-display text-2xl font-bold tracking-tight text-white">
+    <Link href="/" className="font-display text-2xl font-bold tracking-tight text-white">
       Quali<span className="text-orange">Trail</span>
     </Link>
   );
@@ -22,8 +40,9 @@ function Wordmark() {
 
 export function Sidebar() {
   const pathname = usePathname();
+  const NAV = useNav();
   const router = useRouter();
-  const active = (href: string) => pathname.startsWith(href);
+  const active = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
   async function signOut() {
     await createBrowserSupabase().auth.signOut();
@@ -74,7 +93,8 @@ export function Sidebar() {
         )}
       </header>
       <nav
-        className="no-print fixed inset-x-0 bottom-0 z-20 grid grid-cols-4 border-t border-white/10 bg-navy pb-[env(safe-area-inset-bottom)] lg:hidden"
+        style={{ gridTemplateColumns: `repeat(${Math.max(NAV.length, 1)}, minmax(0, 1fr))` }}
+        className="no-print fixed inset-x-0 bottom-0 z-20 grid border-t border-white/10 bg-navy pb-[env(safe-area-inset-bottom)] lg:hidden"
         aria-label="Main"
       >
         {NAV.map((item) => (

@@ -1,9 +1,9 @@
 import { STATEMENT_TEXT } from "@/lib/server/signoff/statement";
-import { allow, clientIp, featureOn, gone, json, off, rpc, sessionHash, tokenHash, tooMany } from "@/lib/server/signoff/service";
+import { allow, clientIp, featureOn, gone, guarded, json, off, rpc, sessionHash, tokenHash, tooMany } from "@/lib/server/signoff/service";
 import type { SnapshotResponse } from "@/lib/types";
 
 /** POST /api/signoff/snapshot — the job snapshot. Needs the link token AND a code-verified session. */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   if (!featureOn()) return off();
   if (!(await allow("snapshot-ip", await clientIp(), 600, 60))) return tooMany();
   const [th, sh] = [await tokenHash(request), await sessionHash()];
@@ -30,3 +30,5 @@ export async function POST(request: Request) {
   };
   return json(body);
 }
+
+export const POST = guarded(handlePOST);

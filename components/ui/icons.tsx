@@ -1,6 +1,8 @@
 /** ponytail: hand-rolled 24px stroke icons — swap for lucide-react if the set grows past ~20. */
 const PATHS = {
   passport: "M5 3h11a3 3 0 0 1 3 3v15H5zM9 14a3 3 0 1 0 6 0 3 3 0 0 0-6 0M8 7h8",
+  people: "M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6M3 20a6 6 0 0 1 12 0M16 11a3 3 0 1 0 0-6M17 14a5 5 0 0 1 4 6",
+  clipboard: "M8 4h8v3H8zM6 5H5v16h14V5h-1M9 12l2 2 4-4",
   evidence: "M4 4h6l2 3h8v13H4zM8 12h8M8 16h5",
   briefcase: "M3 8h18v12H3zM8 8V5h8v3M3 13h18",
   report: "M6 3h9l4 4v14H6zM14 3v5h5M9 13h7M9 17h5",

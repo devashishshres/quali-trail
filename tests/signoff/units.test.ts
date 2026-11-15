@@ -50,7 +50,7 @@ describe("configuration gating", () => {
   it("defaults to off and never reports ready without full configuration", () => {
     expect(mailMode({} as NodeJS.ProcessEnv)).toBe("off");
     expect(signoffStatus({ SIGNOFF_ENABLED: "true" } as unknown as NodeJS.ProcessEnv).ready).toBe(false);
-    const mock = { SIGNOFF_ENABLED: "true", SIGNOFF_MAIL_MODE: "mock", SIGNOFF_PEPPER: KEY, APP_BASE_URL: "http://localhost:3000" } as unknown as NodeJS.ProcessEnv;
+    const mock = { SIGNOFF_ENABLED: "true", SIGNOFF_MAIL_MODE: "mock", SIGNOFF_PEPPER: KEY, APP_BASE_URL: "http://localhost:3000", NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321" } as unknown as NodeJS.ProcessEnv;
     expect(signoffStatus(mock)).toMatchObject({ ready: true, mode: "mock" });
     const resend = { ...mock, SIGNOFF_MAIL_MODE: "resend" } as NodeJS.ProcessEnv;
     expect(missingConfig(resend)).toEqual(["RESEND_API_KEY", "RESEND_FROM", "RESEND_WEBHOOK_SECRET"]);

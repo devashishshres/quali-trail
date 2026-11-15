@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { FIXTURE_MODE } from "@/lib/client/api";
 import { createBrowserSupabase } from "@/lib/supabase/browser";
 import { Notice } from "@/components/ui/states";
@@ -22,7 +23,8 @@ export default function SignInPage() {
       if (error) return setError("Sign-in failed. Check your email and password and try again.");
       const next = new URLSearchParams(window.location.search).get("next");
       const destination = next ? new URL(next, window.location.origin) : null;
-      window.location.assign(destination?.origin === window.location.origin ? destination.pathname + destination.search + destination.hash : "/passport");
+      // "/" lets the server route by role (worker, supervisor, or onboarding).
+      window.location.assign(destination?.origin === window.location.origin ? destination.pathname + destination.search + destination.hash : "/");
     } catch {
       setError("Couldn't connect to sign-in. Please try again.");
     } finally {
@@ -54,6 +56,9 @@ export default function SignInPage() {
       <section className="flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-sm">
           <h1 className="font-display text-4xl font-semibold">Sign in</h1>
+          <Suspense fallback={null}>
+            <ConfirmNotice />
+          </Suspense>
           {FIXTURE_MODE ? (
             <div className="mt-6 space-y-4">
               <Notice title="Fixture mode is on">Sign-in isn&apos;t needed while the app is showing sample data.</Notice>
@@ -75,11 +80,47 @@ export default function SignInPage() {
               <button className="btn btn-primary w-full" disabled={busy}>
                 {busy ? "Signing in…" : "Sign in"}
               </button>
-              <p className="text-sm text-slate">Use the demo account provided by your project owner.</p>
+              <p className="flex justify-between gap-4 text-sm text-slate">
+                <span>New here? <SignUpLink /></span>
+                <Link href="/forgot-password" className="font-semibold underline">Forgot password?</Link>
+              </p>
             </form>
           )}
         </div>
       </section>
     </main>
+  );
+}
+
+function ConfirmNotice() {
+  const notice = useSearchParams().get("notice");
+  if (notice === "expired") {
+    return (
+      <div className="mt-4">
+        <Notice title="That email link has expired or was already used">If you already confirmed your address, sign in below. Otherwise sign up again to get a new link.</Notice>
+      </div>
+    );
+  }
+  if (notice !== "confirm") return null;
+  return (
+    <div className="mt-4">
+      <Notice title="Email link opened">If your email address is now confirmed, sign in below. If the link had expired, sign up again to get a new one.</Notice>
+    </div>
+  );
+}
+
+function SignUpLink() {
+  return (
+    <Suspense fallback={<Link href="/sign-up" className="font-semibold underline">Create an account</Link>}>
+      <SignUpLinkInner />
+    </Suspense>
+  );
+}
+function SignUpLinkInner() {
+  const next = useSearchParams().get("next");
+  return (
+    <Link href={next ? `/sign-up?next=${encodeURIComponent(next)}` : "/sign-up"} className="font-semibold underline">
+      Create an account
+    </Link>
   );
 }

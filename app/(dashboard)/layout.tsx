@@ -1,10 +1,13 @@
+import { Suspense } from "react";
 import { Sidebar } from "@/components/shell/sidebar";
 import { FIXTURE_MODE } from "@/lib/client/api";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-dvh flex-col lg:flex-row">
-      <Sidebar />
+      <Suspense fallback={<aside className="no-print hidden h-dvh w-60 shrink-0 bg-navy lg:block" aria-hidden="true" />}>
+        <Sidebar />
+      </Suspense>
       <div className="min-w-0 flex-1">
         {FIXTURE_MODE && (
           <div className="no-print border-b border-orange/40 bg-orange-wash">

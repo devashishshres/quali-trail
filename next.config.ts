@@ -16,7 +16,16 @@ const nextConfig: NextConfig = {
   // The customer pages carry a link token in the URL fragment and show a third party's job details:
   // keep them out of caches, search indexes and referrers.
   headers: async () => [
-    ...["/signoff", "/signoff/:path*"].map((source) => ({
+    // Every page and API response: never framed by another site (clickjacking), no MIME sniffing.
+    {
+      source: "/:path*",
+      headers: [
+        { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+        { key: "X-Frame-Options", value: "DENY" },
+        { key: "X-Content-Type-Options", value: "nosniff" },
+      ],
+    },
+    ...["/signoff", "/signoff/:path*", "/invite/:path*", "/auth/:path*", "/forgot-password", "/reset-password"].map((source) => ({
       source,
       headers: [
         { key: "Cache-Control", value: "no-store" },
