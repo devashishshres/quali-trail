@@ -110,8 +110,8 @@ private and are counted as "withheld" in the technician's picker, with an honest
 
 ## Earlier main-branch findings
 
-Seven findings were reported against main before this feature; the written list was never available to the builder.
-Two were described and are fixed (fix PR after #13, with focused tests):
+Seven findings were reported against main in the partner's earlier review. Two are fixed (PR #14, with focused
+tests):
 
 1. **Oversized clarification exhausted explanations.** A listing line with many eligibility conditions (experience,
    licence, lifting, diploma, background check, …) produced a fixed clarification longer than the stored 800-character
@@ -123,7 +123,13 @@ Two were described and are fixed (fix PR after #13, with focused tests):
    while contractions ("didn't install", "wasn't performed") were not seen as negations at all. Now judged clause by
    clause with the same window as the explanation task breakdown (`affirmedMatch` in `lib/server/matching/evaluate.ts`).
 
-The other five could not be identified or rechecked (no description available); they remain UNVERIFIED and open.
+The other five are NOT fixed and remain open (recorded from the partner's review; not changed in this release):
+
+3. One route calls `allow()` outside `guarded()`, so a rate-limit store failure returns 500 instead of 503.
+4. `readExplanations` may let an optional explanation failure break core match-result reads.
+5. `key={v.version}` may remount the review form and hide confirmation errors.
+6. Contradictory "no related record" and "couldn't be searched" messages can appear together.
+7. An import interrupted between fetching and acquiring the drafting lease may remain stuck.
 
 ## Release record
 
