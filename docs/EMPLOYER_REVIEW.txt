@@ -1,7 +1,17 @@
 # Employer review portal: design and handoff
 
-Status: built on `feature/employer-review` behind `EMPLOYER_REVIEW_ENABLED` (off by default). Revision 2 narrows what
-can be shared (below). Hosted migration applied 2026-11-15 (approved); feature off in Production.
+Status: merged (PR #13) behind `EMPLOYER_REVIEW_ENABLED` (off by default). Revision 2 narrows what can be shared
+(below). Hosted migration applied 2026-11-15 (approved). Production runs with the flag explicitly `false`; enabling it
+in Production has NOT been approved.
+
+## When the flag is off
+
+Every employer page (`/employer`, `/employer/<id>`, `/invite/employer`, `/share`) and API (`/api/employer/*`,
+`/api/employer-shares*`) answers 404 from the proxy (`lib/server/employer/routes.ts`), before sign-in redirects or role
+routing, so the feature looks absent to everyone: signed out, technician, supervisor or reviewer. Each API route also
+checks the flag first (before sign-in), as a second layer. The sidebar has no Share link; the customer and supervisor
+forms show no sharing question. Tests: `tests/employer/disabled.test.ts`, and the flag-off cases in
+`tests/employer/routes.test.ts`.
 
 ## Intent
 
@@ -83,9 +93,10 @@ private and are counted as "withheld" in the technician's picker, with an honest
 ## Verification done (isolated local only)
 
 - Unit, route and database tests: `tests/employer/*.test.ts`, `tests/db/employer.test.ts`, including attempts to request
-  unselected items, excluded record types, work originals and excluded fields through the API; full suite 685/685.
-- Browser journeys: `scripts/e2e-employer.mjs` 43/43 (flag on, mock email; includes the customer permission page); existing `scripts/e2e-local.mjs` 95/95 with
-  the employer flag off.
+  unselected items, excluded record types, work originals and excluded fields through the API, and the disabled
+  behaviour above.
+- Browser journeys: `scripts/e2e-employer.mjs` (flag on, mock email; customer permission page; view counting) and the
+  existing `scripts/e2e-local.mjs` with the employer flag off. Latest counts are in the release record below.
 
 ## Calls made by the builder (please check)
 
@@ -97,10 +108,28 @@ private and are counted as "withheld" in the technician's picker, with an honest
 - Masked address hints keep the domain (same as supervisor invitations).
 - Default expiry 7 days (choices 3/7/14/30); 10 shares/hour and 20/day per technician.
 
-## Unresolved (not fixed by this work)
+## Earlier main-branch findings
 
-- **Seven main-branch findings** from an earlier review remain open. The planned partner bug-fix PR is not being prepared,
-  so they are NOT fixed and release no longer waits on them. This PR does not address them.
+Seven findings were reported against main in the partner's earlier review. Two are fixed (PR #14, with focused
+tests):
+
+1. **Oversized clarification exhausted explanations.** A listing line with many eligibility conditions (experience,
+   licence, lifting, diploma, background check, …) produced a fixed clarification longer than the stored 800-character
+   limit; saving threw, the run was marked failed and later requests were refused as "exhausted". Now built by
+   `joinClarification`: whole sentences in order while they fit, then one fixed "other conditions" sentence; the
+   context-only and search-failure notes are always kept.
+2. **Negation discarded valid work.** Any "no/not/never/without" anywhere in an activity discarded the whole activity
+   for scope terms and install/startup checks ("Installed residential heat pump, no leaks found" lost "residential"),
+   while contractions ("didn't install", "wasn't performed") were not seen as negations at all. Now judged clause by
+   clause with the same window as the explanation task breakdown (`affirmedMatch` in `lib/server/matching/evaluate.ts`).
+
+The other five are NOT fixed and remain open (recorded from the partner's review; not changed in this release):
+
+3. One route calls `allow()` outside `guarded()`, so a rate-limit store failure returns 500 instead of 503.
+4. `readExplanations` may let an optional explanation failure break core match-result reads.
+5. `key={v.version}` may remount the review form and hide confirmation errors.
+6. Contradictory "no related record" and "couldn't be searched" messages can appear together.
+7. An import interrupted between fetching and acquiring the drafting lease may remain stuck.
 
 ## Release record
 
@@ -124,5 +153,13 @@ private and are counted as "withheld" in the technician's picker, with an honest
    Fixed in d00634a and verified on the Preview (1 packet fetch after three window returns, previously 4). The live
    test share's existing log was left as recorded (8 "viewed" entries for about five page loads).
    Preview employer flag set back to false afterwards.
-3. Conditional merge with `EMPLOYER_REVIEW_ENABLED=false` in Production (approved only if step 2 passes).
+3. Done 2026-11-15: PR #13 merged (`7232f59`, same tree as the tested `48807f6`). `EMPLOYER_REVIEW_ENABLED=false` added
+   to Production only. Production deployment `dpl_GYtwZbpVq7cPsH2zKaPKvLs1mYj1` (www.proofisinthepiping.work), from a
+   clean export of main. Read-only checks: demo worker evidence, opportunities and reports pages, supervisor page, no
+   Share link, app reports the feature off, all employer APIs 404. Page shells still loaded (empty, "Not found") in that
+   build; the follow-up fix makes them real 404s. Rollback target (previous working deployment):
+   `dpl_2Bwkb9AMcTf6agQmbtU4qDaLxbSR`; the current working deployment is `dpl_GYtwZbpVq7cPsH2zKaPKvLs1mYj1`.
+   Test accounts: the fictional technician and the no-role account stopped accepting their stored passwords (cause not
+   determined; the project's auth audit table is empty). Both were reset by admin on 2026-11-15 (ids, records and roles
+   unchanged; no email). Alex, Jordan, Sam and the +sup account were not changed.
 4. Not approved yet: enabling employer sharing in Production.

@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { safeNext } from "@/lib/server/accounts/policy";
+import { employerDisabledResponse } from "@/lib/server/employer/routes";
 
 /**
  * Runs before every page and API request.
@@ -39,6 +40,9 @@ export async function proxy(request: NextRequest) {
   if (crossSiteWrite(request)) {
     return NextResponse.json({ error: { code: "forbidden", message: "Cross-site request refused." } }, { status: 403 });
   }
+  // A disabled feature is absent for everyone: answered before sign-in redirects and role routing.
+  const disabled = employerDisabledResponse(request.nextUrl.pathname);
+  if (disabled) return disabled;
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;

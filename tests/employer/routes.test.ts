@@ -273,6 +273,32 @@ describe.skipIf(!ADMIN_URL)("employer sharing routes (local database)", () => {
     expect(await hasPendingEmployerShare(email)).toBe(false);
   });
 
+  it("with the flag off the answer is 404 for every caller, checked before sign-in or role (never 401)", async () => {
+    process.env.EMPLOYER_REVIEW_ENABLED = "false";
+    const id = randomUUID();
+    const savedWorker = asWorker;
+    try {
+      for (const [who, acct, worker] of [["signed out", null, null], ["account without a technician profile", await user(`norole.${randomUUID().slice(0, 6)}@employer.example`), null]] as const) {
+        current = acct;
+        asWorker = worker;
+        const statuses = {
+          list: (await (await R.shares()).GET()).status,
+          create: (await (await R.shares()).POST(req("/x", { method: "POST", body: {} }))).status,
+          candidates: (await (await R.candidates()).GET()).status,
+          preview: (await (await R.preview()).POST(req("/x", { method: "POST", body: {} }))).status,
+          mine: (await (await R.mine()).GET(req("/x"), params(id))).status,
+          withdraw: (await (await R.mine()).DELETE(req("/x", { method: "DELETE" }), params(id))).status,
+          reviewerList: (await (await R.list()).GET()).status,
+          reviewerGet: (await (await R.get()).GET(req("/x"), params(id))).status,
+          accept: (await (await R.accept()).POST(req("/x", { method: "POST", token: "x" }))).status,
+        };
+        expect({ who, statuses }).toEqual({ who, statuses: Object.fromEntries(Object.keys(statuses).map((k) => [k, 404])) });
+      }
+    } finally {
+      asWorker = savedWorker;
+    }
+  });
+
   it("customer: the acknowledgment wording is unchanged; sharing is a separate, unticked permission recorded only when given", async () => {
     process.env.SIGNOFF_ENABLED = "true";
     const { hmac } = await import("@/lib/server/signoff/crypto");

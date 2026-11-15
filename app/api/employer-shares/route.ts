@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { getAuthedContext } from "@/lib/api/auth";
 import { apiError, fieldErrors, ok } from "@/lib/api/responses";
 import { DELIVERY_FAILURE_MESSAGE, deliver } from "@/lib/server/email/deliver";
@@ -8,14 +9,15 @@ import { buildPacket, PacketSelectionError } from "@/lib/server/employer/packet"
 import { loadCandidates, SELECTION_MESSAGE, SHARE_REASON } from "@/lib/server/employer/service";
 import { hmac, maskEmail, newToken, normalizeEmail } from "@/lib/server/signoff/crypto";
 import { logSignoffError } from "@/lib/server/signoff/redact";
-import { allow, appBaseUrl, guarded, rpc, rpcValue } from "@/lib/server/signoff/service";
+import { allow, appBaseUrl, guarded, rpc, rpcValue, off } from "@/lib/server/signoff/service";
 import { CreateShareRequest, PACKET_FORMAT, WorkerShare } from "@/lib/types/employer";
 
 /** GET /api/employer-shares — this technician's shares (masked addresses, access counts). */
 async function handleGET() {
+  await connection(); // per request, never prerendered
+  if (!employerReviewEnabled()) return off(); // disabled: absent for everyone, before any sign-in or role check
   const ctx = await getAuthedContext();
   if (!ctx) return apiError("unauthorized", "Sign in first.");
-  if (!employerReviewEnabled()) return ok({ enabled: false, canSend: false, shares: [] });
   const list = await rpcValue<unknown[]>("employer_share_list_for_worker", { p_worker: ctx.worker.id });
   if (!Array.isArray(list)) return apiError("internal", "Couldn't load your shares.");
   return ok({ enabled: true, canSend: emailReady(), mode: emailMode(), shares: list.map((s) => WorkerShare.parse(s)) });
@@ -27,9 +29,10 @@ async function handleGET() {
  * except the selection, and the database re-checks every item's eligibility when storing it.
  */
 async function handlePOST(request: Request) {
+  await connection(); // per request, never prerendered
+  if (!employerReviewEnabled()) return off(); // disabled: absent for everyone, before any sign-in or role check
   const ctx = await getAuthedContext();
   if (!ctx) return apiError("unauthorized", "Sign in first.");
-  if (!employerReviewEnabled()) return apiError("not_found", "Sharing with employers isn't available.");
   if (!emailReady()) return apiError("validation_failed", "Email isn't configured on this server yet, so packets can't be shared.");
   const body = CreateShareRequest.safeParse(await request.json().catch(() => null));
   if (!body.success) return apiError("validation_failed", "Check the highlighted fields.", fieldErrors(body.error));

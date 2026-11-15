@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Evidence, Requirement } from "@/lib/types";
 import { RequirementExplanation } from "@/lib/types/explanations";
 import { analyzeRequirement } from "@/lib/server/opportunities/requirement-rules";
-import { buildModelInput, plan, redact, stubSimilarity, validateModelItems, type ModelItem } from "@/lib/server/explanations/analysis";
+import { buildModelInput, CLARIFICATION_MAX, CONTEXT_ONLY_NOTE, ELIGIBILITY_TEXT, joinClarification, MORE_CONDITIONS, plan, redact, SEARCH_FAILED_NOTE, stubSimilarity, validateModelItems, type ModelItem } from "@/lib/server/explanations/analysis";
 
 let n = 0;
 function rec(title: string, activities: string[], over: Partial<Evidence> & { summary?: string } = {}): Evidence {
@@ -177,5 +177,23 @@ describe("validating model output", () => {
     expect(first([ok({ noRelatedEvidence: true })]).withheld).toBe("inconsistent");
     expect(first([ok({ related: [] })]).withheld).toBe("inconsistent");
     expect(run(null as unknown as ModelItem[]).explanations.every((x) => x.kind === "ai_unavailable")).toBe(true);
+  });
+});
+
+describe("joinClarification (stored limit)", () => {
+  const all = Object.values(ELIGIBILITY_TEXT) as string[];
+  it("short text is unchanged", () => {
+    expect(joinClarification([all[0], all[0]], [CONTEXT_ONLY_NOTE])).toBe(`${all[0]} ${CONTEXT_ONLY_NOTE}`);
+    expect(joinClarification([], [])).toBeNull();
+  });
+  it("every condition plus both notes still fits; whole sentences only, in order; notes always kept", () => {
+    expect(all.join(" ").length).toBeGreaterThan(CLARIFICATION_MAX); // the case that used to fail
+    const out = joinClarification(all, [CONTEXT_ONLY_NOTE, SEARCH_FAILED_NOTE])!;
+    expect(out.length).toBeLessThanOrEqual(CLARIFICATION_MAX);
+    expect(out.endsWith(`${MORE_CONDITIONS} ${CONTEXT_ONLY_NOTE} ${SEARCH_FAILED_NOTE}`)).toBe(true);
+    const kept = all.filter((t) => out.includes(t));
+    expect(kept.length).toBeGreaterThan(0);
+    expect(out.startsWith(kept.join(" "))).toBe(true);
+    expect(RequirementExplanation.shape.clarification.safeParse(out).success).toBe(true);
   });
 });
