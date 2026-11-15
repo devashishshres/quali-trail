@@ -9,6 +9,8 @@ import { ASSESSMENT_LABEL, CANNOT_ASSESS_NOTE, NO_EVIDENCE_NOTE, formatDate, for
 import { FIXTURE_MODE } from "@/lib/client/api";
 import { accountsApi } from "@/lib/client/accounts-api";
 import { FitSummary } from "@/components/opportunities/fit-summary";
+import { NextStepList } from "@/components/opportunities/next-steps";
+import { nextSteps, type ConfirmFlows } from "@/lib/next-steps";
 import { ImportCard } from "@/components/opportunities/import-card";
 import { Constellation } from "@/components/opportunities/constellation";
 import { RequirementList } from "@/components/opportunities/requirement-list";
@@ -44,12 +46,12 @@ export default function OpportunitiesPage() {
       {opps.status === "loading" && <Loading label="Loading opportunities…" />}
       {opps.error && <ErrorNotice error={opps.error} onRetry={opps.reload} />}
       {opps.data && !opportunity && <p className="text-slate">No opportunities yet.</p>}
-      {opportunity && <Matcher key={opportunity.id} opportunity={opportunity} />}
+      {opportunity && <Matcher key={opportunity.id} opportunity={opportunity} flows={me.data ? { customerSignoff: me.data.features.customerSignoff, supervisorReview: me.data.features.supervisorReview } : null} />}
     </>
   );
 }
 
-function Matcher({ opportunity }: { opportunity: Opportunity }) {
+function Matcher({ opportunity, flows }: { opportunity: Opportunity; flows: ConfirmFlows | null }) {
   const latest = useLoad(() => api.latestMatch(opportunity.id), opportunity.id);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<ApiRequestError | null>(null);
@@ -147,7 +149,7 @@ function Matcher({ opportunity }: { opportunity: Opportunity }) {
 
       {run && opportunity.importInfo && (
         <div className="mt-6">
-          <FitSummary opportunity={opportunity} run={run} onSelect={setReqId} />
+          <FitSummary opportunity={opportunity} run={run} onSelect={setReqId} flows={flows} />
         </div>
       )}
 
@@ -170,14 +172,14 @@ function Matcher({ opportunity }: { opportunity: Opportunity }) {
             <>
               <Constellation result={selectedResult} runId={run.id} />
               {selectedResult.assessment === "cannot_assess" && <p className="mt-4 text-sm">{CANNOT_ASSESS_NOTE}</p>}
-              {(selectedResult.assessment === "needs_review" || selectedResult.assessment === "no_sufficient_evidence") && (
-                <p className="mt-4 text-sm">
-                  Have a record that covers this?{" "}
-                  <Link href="/evidence" className="font-semibold underline underline-offset-2">
-                    Add it in My Evidence
-                  </Link>
-                  , then run matching again.
-                </p>
+              {selectedResult.assessment !== "evidence_found" && (
+                <div className="mt-4">
+                  <p className="text-sm font-semibold">Your next steps for this requirement</p>
+                  <div className="mt-1">
+                    <NextStepList steps={nextSteps(selectedResult, flows ?? undefined)} />
+                  </div>
+                  <p className="mt-2 text-sm text-slate">After you add or change a record, run matching again.</p>
+                </div>
               )}
             </>
           ) : (

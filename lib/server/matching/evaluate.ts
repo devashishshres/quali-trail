@@ -14,6 +14,7 @@
  */
 import { contributionText, relationshipText, termsClause } from "./explain";
 import { REVIEW_REASON_TEXT } from "../opportunities/requirement-rules";
+import { GAP_AMBIGUOUS, GAP_CONFIRMATION, gapAmbiguousUncertainty, gapIncomplete, gapNoRecord } from "@/lib/next-steps";
 import type {
   Evidence,
   EvidenceAssessment,
@@ -228,7 +229,7 @@ function classify(req: Requirement, c: Candidate, today: string, opts: ClassifyO
     return {
       kind: "incomplete",
       missing: [],
-      ambiguous: "The requirement's terms appear only in this record's summary or secondary details, not in its title, skills or activities.",
+      ambiguous: GAP_AMBIGUOUS,
     };
   }
   return { kind: "direct", notes: [] };
@@ -310,13 +311,13 @@ function evaluateBasic(req: Requirement, candidates: Candidate[], today: string,
       case "incomplete": {
         sawIncomplete = true;
         if (v.ambiguous) {
-          uncertainties.push(clip(`"${e.title}": ${v.ambiguous} Please confirm it covers the requirement.`, 500));
+          uncertainties.push(clip(gapAmbiguousUncertainty(e.title), 500));
           incomplete.push(connection(c, "direct", contributionText(e, terms, "incomplete"), `${v.ambiguous} ${termsClause(terms)}`));
           related.push({ e, terms, direct: true });
           break;
         }
         const what = v.missing.join(", ");
-        missingDocumentation.push(clip(`"${e.title}" does not state ${what}.`, 500));
+        missingDocumentation.push(clip(gapIncomplete(e.title, what), 500));
         incomplete.push(
           connection(c, "direct", contributionText(e, terms, "incomplete"), `It is the type of record the requirement asks for, but it does not state ${what}. ${termsClause(terms)}`),
         );
@@ -346,24 +347,24 @@ function evaluateBasic(req: Requirement, candidates: Candidate[], today: string,
     assessment = "needs_review";
     explanation = "A record describes relevant work or credentials, but it is self-reported with no supporting document.";
     uncertainties.push("The matching record is self-reported.");
-    missingDocumentation.push("A supporting document or independent confirmation for this record");
+    missingDocumentation.push(GAP_CONFIRMATION);
   } else if (sawIncomplete) {
     assessment = "needs_review";
     explanation = "A record of the right kind exists, but it is missing details or is ambiguous, so a person should review it.";
   } else if (supporting.length > 0 && !sawWrongScope) {
     assessment = "no_sufficient_evidence";
     explanation = "Related records were found, but none is the kind of documentation this requirement asks for.";
-    missingDocumentation.push(`A record that directly documents: ${clip(req.originalText, 200)}`);
+    missingDocumentation.push(gapNoRecord(clip(req.originalText, 200)));
   } else if (sawWrongScope) {
     assessment = "no_sufficient_evidence";
     explanation = "A related credential was found, but its type is not one the requirement accepts.";
-    missingDocumentation.push(`A record that directly documents: ${clip(req.originalText, 200)}`);
+    missingDocumentation.push(gapNoRecord(clip(req.originalText, 200)));
   } else {
     assessment = "no_sufficient_evidence";
     explanation = sawExpired
       ? "The only matching record is expired or invalid."
       : "No sufficient documentation was found for this requirement.";
-    missingDocumentation.push(`A record that directly documents: ${clip(req.originalText, 200)}`);
+    missingDocumentation.push(gapNoRecord(clip(req.originalText, 200)));
   }
 
   const relationship = relationshipText(related);

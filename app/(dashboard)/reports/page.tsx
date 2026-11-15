@@ -10,6 +10,9 @@ import { api } from "@/lib/client/api";
 import { useLoad } from "@/lib/client/use-load";
 import { CANNOT_ASSESS_NOTE, NO_EVIDENCE_NOTE, PRIORITY_LABEL, TYPE_LABEL, formatDate, formatStamp } from "@/lib/client/labels";
 import { FitSummary } from "@/components/opportunities/fit-summary";
+import { NextStepsSection } from "@/components/opportunities/next-steps";
+import { accountsApi } from "@/lib/client/accounts-api";
+import type { ConfirmFlows } from "@/lib/next-steps";
 import { ErrorNotice, Loading, Notice, PageHeader } from "@/components/ui/states";
 import { AssessmentLabel, FictionalTag, SignoffTag, VerificationTag } from "@/components/ui/status";
 import { Icon } from "@/components/ui/icons";
@@ -17,6 +20,8 @@ import { Icon } from "@/components/ui/icons";
 export default function ReportsPage() {
   const profile = useLoad(api.listEvidence);
   const opps = useLoad(api.listOpportunities);
+  const me = useLoad(() => (FIXTURE_MODE ? Promise.resolve(null) : accountsApi.me()));
+  const flows: ConfirmFlows | null = me.data ? { customerSignoff: me.data.features.customerSignoff, supervisorReview: me.data.features.supervisorReview } : null;
   const [oppId, setOppId] = useState<string | null>(null);
   const list = opps.data?.opportunities ?? [];
   const opportunity = list.find((o) => o.id === oppId) ?? list[0];
@@ -40,12 +45,12 @@ export default function ReportsPage() {
       {error && <ErrorNotice error={error} onRetry={() => (profile.reload(), opps.reload())} />}
       {(profile.status === "loading" || opps.status === "loading") && <Loading label="Preparing your report…" />}
       {profile.data && opps.data && !opportunity && <p className="text-slate">No opportunities yet.</p>}
-      {profile.data && opportunity && <Packet key={opportunity.id} worker={profile.data.worker} evidence={profile.data.evidence} opportunity={opportunity} />}
+      {profile.data && opportunity && <Packet key={opportunity.id} worker={profile.data.worker} evidence={profile.data.evidence} opportunity={opportunity} flows={flows} />}
     </>
   );
 }
 
-function Packet({ worker, evidence, opportunity }: { worker: Worker; evidence: Evidence[]; opportunity: Opportunity }) {
+function Packet({ worker, evidence, opportunity, flows }: { worker: Worker; evidence: Evidence[]; opportunity: Opportunity; flows: ConfirmFlows | null }) {
   const latest = useLoad(() => api.latestMatch(opportunity.id), opportunity.id);
   // Completed customer acknowledgments and supervisor reviews only. The summary endpoint never returns customer
   // addresses, typed signatures or comments, so an ordinary packet cannot show them.
@@ -207,6 +212,10 @@ function Packet({ worker, evidence, opportunity }: { worker: Worker; evidence: E
             <FitSummary opportunity={opportunity} run={run} print />
           </div>
         )}
+
+        <div className="mt-6">
+          <NextStepsSection opportunity={opportunity} run={run} flows={flows} />
+        </div>
 
         <section className="mt-8">
           <h3 className="font-display text-2xl font-semibold">Requirement by requirement</h3>

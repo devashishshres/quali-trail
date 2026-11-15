@@ -92,6 +92,22 @@ async function openReport(p: Page, oppId: string) {
   await sleep(800);
   return text(p);
 }
+/** Pasted job, required first: install+startup (self-reported), licence, then NATE, OSHA 10, brazing. EPA is found. */
+const EXPECTED_KINDS = ["confirm", "manual_review", "upload", "upload", "upload"];
+const BANNED = /\b(lack|lacks|lacking|unqualified|not qualified|incapable|course|courses|enrol|enroll|hiring|hired|likely|probability|percent)\b/i;
+
+/** Reads the "Your next steps" section on the current page. */
+async function nextStepsOnPage(p: Page) {
+  await p.waitForSelector("[data-section=next-steps]");
+  return p.evaluate(() => {
+    const sec = document.querySelector("[data-section=next-steps]") as HTMLElement;
+    const items = [...sec.querySelectorAll("[data-step-kind]")] as HTMLElement[];
+    const byKind: Record<string, string> = {};
+    for (const i of items) byKind[i.dataset.stepKind!] = `${byKind[i.dataset.stepKind!] ?? ""} ${i.innerText}`;
+    return { kinds: items.map((i) => i.dataset.stepKind!), byKind, text: sec.innerText, links: [...sec.querySelectorAll("a")].map((a) => a.getAttribute("href") ?? "") };
+  });
+}
+
 const printable = (p: Page) => p.evaluate(() => !([...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Print or save as PDF")) as HTMLButtonElement)?.disabled);
 
 if (PHASE === "flag-off") {
@@ -125,6 +141,61 @@ if (PHASE === "flag-off") {
     }
     const latest = await api(p, `/api/matches/latest?opportunityId=${st.pastedJob}`);
     check("saved match run still served", latest.s === 200 && latest.j?.matchRun?.status === "completed");
+
+    // "Your next steps" with sign-off and supervisor review ON (this phase's app env). Following a link sends nothing.
+    const workerId = (await admin.from("opportunity_imports").select("worker_id").eq("id", st.importId).single()).data!.worker_id as string;
+    const countRequests = async () => {
+      const a = await admin.from("signoff_requests").select("id", { count: "exact", head: true }).eq("worker_id", workerId);
+      const b = await admin.from("review_requests").select("id", { count: "exact", head: true }).eq("worker_id", workerId);
+      return `${a.count}/${b.count}`;
+    };
+    const before = await countRequests();
+    await p.goto(`${APP}/opportunities?job=${st.pastedJob}`, { waitUntil: "networkidle0" });
+    const ns = await nextStepsOnPage(p);
+    check("next steps (flows on): offers supervisor review and customer acknowledgment, says nothing is sent", /ask a supervisor to review it or ask the customer to acknowledge it/.test(ns.byKind.confirm ?? "") && /Nothing is sent until you fill in and submit a request there/.test(ns.byKind.confirm ?? ""));
+    const recordHref = ns.links.find((h) => /^\/evidence#evidence-/.test(h));
+    const mutating: string[] = [];
+    const onReq = (r: { method: () => string; url: () => string }) => { if (r.method() !== "GET" && r.method() !== "HEAD" && r.url().startsWith(APP)) mutating.push(`${r.method()} ${new URL(r.url()).pathname}`); };
+    p.on("request", onReq);
+    await p.evaluate((h) => (document.querySelector(`[data-section=next-steps] a[href="${h}"]`) as HTMLElement).click(), recordHref!);
+    await p.waitForFunction(() => location.pathname === "/evidence", { timeout: 30000 });
+    const recId = recordHref!.split("evidence-")[1];
+    await p.waitForFunction((id) => !!document.getElementById(`evidence-${id}`)?.innerText.includes("Customer sign-off"), { timeout: 30000 }, recId).catch(async (e) => {
+      const seen = await p.evaluate((id) => ({ url: location.pathname + location.hash, el: document.getElementById(`evidence-${id}`)?.innerText.slice(0, 400) ?? "no element", ids: [...document.querySelectorAll("[id^=evidence-]")].length }), recId);
+      throw new Error(`${(e as Error).message} ${JSON.stringify(seen)}`);
+    });
+    await sleep(1000);
+    p.off("request", onReq);
+    const panel = await p.evaluate((id) => document.getElementById(`evidence-${id}`)!.innerText, recId);
+    check("next steps link opens that record with the existing sign-off and review panels", panel.includes("Customer sign-off") && /supervisor/i.test(panel));
+    check("following the link sends nothing: no write requests, no new sign-off or review requests", mutating.length === 0 && (await countRequests()) === before, `${mutating.join(", ")} ${before}`);
+
+    // Older saved results: a run stored with the plain gap strings older versions wrote (no codes), read by today's UI.
+    const urlReqs = ((await admin.from("requirements").select("id, original_text, mandatory, position").eq("opportunity_id", st.urlJob).order("position")).data ?? []) as { id: string; original_text: string; mandatory: boolean }[];
+    const legacy = urlReqs.map((q, i) => ({
+      requirementId: q.id,
+      originalText: q.original_text,
+      mandatory: q.mandatory,
+      assessment: (["no_sufficient_evidence", "needs_review", "needs_review", "evidence_found", "no_sufficient_evidence"] as const)[i % 5],
+      connections: [],
+      explanation: "Saved by an older version (fixture).",
+      uncertainties: [],
+      missingDocumentation: [
+        [`A record that directly documents: ${q.original_text}`],
+        ['"Older job sheet (FICTIONAL)" does not state a date.'],
+        ["A supporting document or independent confirmation for this record"],
+        [],
+        ["Some wording an older version might have stored."],
+      ][i % 5],
+    }));
+    const started = await admin.rpc("start_match_run", { p_worker_id: workerId, p_opportunity_id: st.urlJob });
+    const fin = await admin.rpc("finalize_match_run", { p_worker_id: workerId, p_run_id: (started.data as { id: string }[])[0].id, p_results: toDbPayload(legacy).results, p_matches: [], p_memory_warning: "LOCAL TEST FIXTURE: older-format saved result." });
+    check("an older-format run is stored", fin.data === "completed", String(fin.data ?? fin.error?.code));
+    await openReport(p, st.urlJob);
+    const old = await nextStepsOnPage(p);
+    const expectedOld = legacy.flatMap((r) => (r.assessment === "evidence_found" ? [] : [["upload", "clarify", "confirm", "", "clarify"][legacy.indexOf(r) % 5]]));
+    check("older saved results produce next steps in the report", old.kinds.slice().sort().join() === expectedOld.slice().sort().join(), `${JSON.stringify(old.kinds)} vs ${JSON.stringify(expectedOld)}`);
+    check("an unrecognised older message is shown as written", old.text.includes("Some wording an older version might have stored."));
   } catch (e) {
     check("aborted", false, (e as Error).message);
   } finally {
@@ -319,7 +390,27 @@ try {
   await p.waitForFunction(() => document.body.innerText.includes("Your evidence fit"));
   const fit = (await text(p)).split("Your evidence fit")[1];
   check("fit summary: Required (3) / Preferred (2) / Priority not stated (1)", /Required \(3\)/.test(fit) && /Preferred \(2\)/.test(fit) && /Priority not stated \(1\)/.test(fit));
+
+  // "Your next steps" (sign-off and supervisor review are OFF in this phase).
+  const ns = await nextStepsOnPage(p);
+  check("next steps: one per gap, required first, found line omitted", JSON.stringify(ns.kinds) === JSON.stringify(EXPECTED_KINDS), JSON.stringify(ns.kinds));
+  check("next steps: self-reported install+startup → upload or confirm, linking to that record", /self-reported with no supporting document/.test(ns.byKind.confirm ?? "") && ns.links.some((h) => /^\/evidence#evidence-/.test(h)));
+  check("next steps: with sign-off and review off, no confirmation flow is offered", !/supervisor|customer/i.test(ns.byKind.confirm ?? ""));
+  check("next steps: licence line → manual clarification with the stored reason", /Driving or licence requirements are not checked/.test(ns.byKind.manual_review ?? "") && /ask the employer to clarify/.test(ns.byKind.manual_review ?? ""));
+  check("next steps: missing documents → upload one already held", /If you already hold a document/.test(ns.byKind.upload ?? ""));
+  check("next steps: never implies missing ability, no courses or hiring talk", ns.text.includes("says nothing about your ability") && !BANNED.test(ns.text), (ns.text.match(BANNED) ?? [""])[0]);
+
   const prep = await openReport(p, pastedJob);
+  const rns = await nextStepsOnPage(p);
+  check("report: next steps section matches the job view", JSON.stringify(rns.kinds) === JSON.stringify(EXPECTED_KINDS), JSON.stringify(rns.kinds));
+  await p.emulateMediaType("print");
+  const printView = await p.evaluate(() => {
+    const sec = document.querySelector("[data-section=next-steps]") as HTMLElement | null;
+    const links = [...(sec?.querySelectorAll("a") ?? [])] as HTMLElement[];
+    return { shown: !!sec && sec.offsetParent !== null, linksHidden: links.length > 0 && links.every((a) => a.offsetParent === null) };
+  });
+  await p.emulateMediaType("screen");
+  check("report: next steps print, with on-screen links left out of the printout", printView.shown && printView.linksHidden, JSON.stringify(printView));
   check("pasted report: supplied-text provenance and acknowledged warning", prep.includes("listing text the technician supplied") && prep.includes("Import warnings acknowledged by the technician"));
   check("pasted report: counts and priorities", /Evidence found\s*1/.test(prep) && /Can't assess automatically\s*1/.test(prep) && prep.includes("Priority not stated"));
   check("pasted report: supporting record listed for the EPA line", prep.includes("EPA 608 Universal certification card (FICTIONAL)"));
