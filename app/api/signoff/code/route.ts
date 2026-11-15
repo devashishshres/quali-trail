@@ -1,7 +1,7 @@
 import { hmac, newCode } from "@/lib/server/signoff/crypto";
-import { codeMessage, sendMessage } from "@/lib/server/signoff/mailer";
+import { deliver } from "@/lib/server/email/deliver";
+import { templates } from "@/lib/server/email/templates";
 import { signoffStatus } from "@/lib/server/signoff/config";
-import { logSignoffError } from "@/lib/server/signoff/redact";
 import { allow, appBaseUrl, clientIp, featureOn, gone, json, off, rpc, tokenHash, tooMany } from "@/lib/server/signoff/service";
 
 /** POST /api/signoff/code — email a one-time code to the address the worker provided (and only that address). */
@@ -20,18 +20,15 @@ export async function POST(request: Request) {
     if (issued.reason === "limit") return json({ error: { code: "rate_limited", message: "The limit of codes for this request was reached." } }, 429);
     return gone();
   }
-  try {
-    const mail = codeMessage({ workerName: String(issued.workerName), code, base: appBaseUrl(), mock: issued.deliveryMode === "mock" });
-    await sendMessage({
-      kind: "code",
-      to: String(issued.email),
-      ...mail,
-      idempotencyKey: `code-${issued.requestId}-${th.slice(0, 8)}-${Date.now()}`,
-      meta: { workerId: String(issued.workerId), requestId: String(issued.requestId) },
-    });
-  } catch (e) {
-    logSignoffError("send-code", e);
-    return json({ error: { code: "internal", message: "The code couldn't be sent. Please try again in a minute." } }, 502);
-  }
+  const sent = await deliver({
+    kind: "customer_code",
+    to: String(issued.email),
+    rendered: templates.customerCode({ base: appBaseUrl(), mock: issued.deliveryMode === "mock", workerName: String(issued.workerName), code }),
+    // One key per issued code: a retried request cannot send the same code twice; a reissue is a new key.
+    idempotencyKey: `code-${issued.requestId}-${hmac("rate", code).slice(0, 16)}`,
+    related: { type: "signoff_request", id: String(issued.requestId) },
+    workerId: String(issued.workerId),
+  });
+  if (!sent.ok) return json({ error: { code: "internal", message: "The code couldn't be sent. Please try again in a minute." } }, 502);
   return json({ sent: true, simulated: issued.deliveryMode === "mock" });
 }

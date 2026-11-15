@@ -32,6 +32,7 @@ create table public.signoff_requests (
   delivery_mode       text not null check (delivery_mode in ('resend','mock')),
   expires_at          timestamptz not null,
   invite_send_count   integer not null default 1,
+  last_invited_at     timestamptz not null default now(),
   failed_total        integer not null default 0,
   verified_session_id uuid,
   email_verified_at   timestamptz,
@@ -404,7 +405,8 @@ begin
   -- The session is left to expire (30 min): it only allows reading the snapshot, and it lets an identical
   -- repeat submission (double click, retry) return success instead of an error.
   insert into public.signoff_events (request_id, event, detail) values (r.id, 'responded', p_decision);
-  return jsonb_build_object('ok', true, 'repeated', false, 'status', new_status);
+  return jsonb_build_object('ok', true, 'repeated', false, 'status', new_status, 'requestId', r.id, 'workerId', r.worker_id,
+    'title', r.snapshot ->> 'title', 'workerName', r.snapshot ->> 'workerName', 'deliveryMode', r.delivery_mode);
 end;
 $$;
 
@@ -434,10 +436,12 @@ begin
     return jsonb_build_object('ok', false, 'reason', 'not_pending');
   end if;
   if r.invite_send_count >= 5 then return jsonb_build_object('ok', false, 'reason', 'limit'); end if;
+  -- Manual reminders are bounded: at most one an hour, five invitations in total.
+  if r.last_invited_at > now() - interval '1 hour' then return jsonb_build_object('ok', false, 'reason', 'too_soon'); end if;
   if exists (select 1 from public.signoff_suppressions where email_hash = r.customer_email_hash) then
     return jsonb_build_object('ok', false, 'reason', 'suppressed');
   end if;
-  update public.signoff_requests set token_hash = p_new_token_hash, invite_send_count = invite_send_count + 1,
+  update public.signoff_requests set token_hash = p_new_token_hash, invite_send_count = invite_send_count + 1, last_invited_at = now(),
          verified_session_id = null, email_verified_at = null where id = r.id;
   update public.signoff_sessions set revoked_at = now() where request_id = r.id and revoked_at is null;
   update public.signoff_codes set invalidated_at = now() where request_id = r.id and used_at is null and invalidated_at is null;

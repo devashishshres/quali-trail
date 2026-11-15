@@ -40,13 +40,14 @@ vi.mock("@/lib/supabase/admin", () => ({
     },
   }),
 }));
-vi.mock("@/lib/server/signoff/mailer", async (orig) => ({
-  ...(await orig<typeof import("@/lib/server/signoff/mailer")>()),
-  sendMessage: async (m: { kind: string; to: string; text: string }) => {
-    sent.push({ kind: m.kind, to: m.to, text: m.text });
-    return { mode: "mock", messageId: "m" };
+vi.mock("@/lib/server/email/deliver", async (orig) => ({
+  ...(await orig<typeof import("@/lib/server/email/deliver")>()),
+  deliver: async (m: { kind: string; to: string; rendered: { text: string } }) => {
+    sent.push({ kind: m.kind, to: m.to, text: m.rendered.text });
+    return { ok: true, mode: "mock", duplicate: false };
   },
 }));
+vi.mock("@/lib/server/signoff/notify", () => ({ notifyCustomerDecision: async () => undefined }));
 
 const WORKER = randomUUID();
 let evidenceId: string;
@@ -79,7 +80,7 @@ async function newInvitation(email = "casey.customer@example.test") {
   expect(r.rows[0].r.ok).toBe(true);
   return token;
 }
-const lastCode = () => /code[^:]*: (\d{6})/.exec(sent.filter((s) => s.kind === "code").at(-1)!.text)![1];
+const lastCode = () => /Code: (\d{6})/.exec(sent.filter((s) => s.kind === "customer_code").at(-1)!.text)![1];
 
 describe.skipIf(!ADMIN_URL)("customer routes (end to end, local database)", () => {
   beforeAll(async () => {

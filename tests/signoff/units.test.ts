@@ -1,14 +1,10 @@
 import { createHmac } from "node:crypto";
-import { mkdtemp, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { hmac, maskEmail, newCode, newToken, normalizeEmail, safeEqual } from "@/lib/server/signoff/crypto";
 import { redact } from "@/lib/server/signoff/redact";
 import { mailMode, missingConfig, signoffStatus } from "@/lib/server/signoff/config";
-import { verifyWebhook } from "@/lib/server/signoff/webhook";
+import { verifyWebhook } from "@/lib/server/email/webhook-signature";
 import { editProblem } from "@/lib/server/signoff/edit-rules";
-import { MailNotConfigured, codeMessage, invitationMessage, sendMessage, sendMock, sendResend } from "@/lib/server/signoff/mailer";
 import { signoffLabel } from "@/lib/client/signoff-labels";
 import type { WorkerSignoff } from "@/lib/types";
 
@@ -60,48 +56,6 @@ describe("configuration gating", () => {
     expect(missingConfig(resend)).toEqual(["RESEND_API_KEY", "RESEND_FROM", "RESEND_WEBHOOK_SECRET"]);
     expect(signoffStatus(resend).ready).toBe(false);
     expect(signoffStatus({ ...mock, SIGNOFF_ENABLED: "false" } as NodeJS.ProcessEnv).enabled).toBe(false);
-  });
-});
-
-describe("mailer", () => {
-  const msg = { kind: "code" as const, to: "casey@example.test", subject: "s", text: "t", idempotencyKey: "k1" };
-  it("off mode refuses to send anything", async () => {
-    await expect(sendMessage(msg, { SIGNOFF_MAIL_MODE: "off" } as unknown as NodeJS.ProcessEnv)).rejects.toBeInstanceOf(MailNotConfigured);
-  });
-  it("resend mode refuses without full configuration and never calls the network", async () => {
-    const f = vi.fn();
-    await expect(sendResend(msg, { SIGNOFF_MAIL_MODE: "resend" } as unknown as NodeJS.ProcessEnv, f as never)).rejects.toBeInstanceOf(MailNotConfigured);
-    expect(f).not.toHaveBeenCalled();
-  });
-  it("resend mode posts once with an idempotency key and without internal metadata", async () => {
-    const env = { SIGNOFF_MAIL_MODE: "resend", SIGNOFF_PEPPER: KEY, APP_BASE_URL: "https://x.test", RESEND_API_KEY: "re_test", RESEND_FROM: "a@x.test", RESEND_WEBHOOK_SECRET: "whsec_x" } as unknown as NodeJS.ProcessEnv;
-    const f = vi.fn(async () => new Response(JSON.stringify({ id: "msg_1" }), { status: 200 }));
-    const r = await sendResend({ ...msg, meta: { workerId: "w", requestId: "r" } }, env, f as never);
-    expect(r).toEqual({ mode: "resend", messageId: "msg_1" });
-    const [, init] = f.mock.calls[0] as unknown as [string, RequestInit];
-    expect((init.headers as Record<string, string>)["Idempotency-Key"]).toBe("k1");
-    expect(String(init.body)).not.toContain("workerId");
-  });
-  it("a provider failure does not echo the response body", async () => {
-    const env = { SIGNOFF_MAIL_MODE: "resend", SIGNOFF_PEPPER: KEY, APP_BASE_URL: "https://x.test", RESEND_API_KEY: "k", RESEND_FROM: "a@x.test", RESEND_WEBHOOK_SECRET: "s" } as unknown as NodeJS.ProcessEnv;
-    const f = vi.fn(async () => new Response("casey@example.test is invalid", { status: 422 }));
-    await expect(sendResend(msg, env, f as never)).rejects.toThrow(/422/);
-    await expect(sendResend(msg, env, f as never)).rejects.not.toThrow(/casey/);
-  });
-  it("mock mode writes a SIMULATED message locally", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "outbox-"));
-    const path = join(dir, "o.jsonl");
-    const r = await sendMock(msg, path);
-    expect(r.mode).toBe("mock");
-    expect(JSON.parse((await readFile(path, "utf8")).trim())).toMatchObject({ simulated: true, kind: "code" });
-  });
-  it("messages are labelled when simulated and the invitation holds no job details", () => {
-    const inv = invitationMessage({ workerName: "Test Worker", link: "http://x.test/signoff#t=abc", base: "http://x.test", validDays: 7, mock: true });
-    expect(inv.subject).toMatch(/^\[SIMULATED\]/);
-    expect(inv.text).toMatch(/SIMULATED MESSAGE/);
-    expect(inv.text).toContain("#t=abc");
-    expect(inv.text).toContain("separate code");
-    expect(codeMessage({ workerName: "T", code: "123456", base: "http://x.test", mock: false }).text).not.toMatch(/SIMULATED/);
   });
 });
 
