@@ -152,10 +152,13 @@ npx supabase start                        # Docker; local Postgres, Auth, Storag
 #   SIGNOFF_ENABLED=true SUPERVISOR_REVIEW_ENABLED=true EMAIL_MODE=mock APP_BASE_URL=http://localhost:3100
 #   SIGNOFF_PEPPER=<random 40+ chars> SIGNUP_MODE=allowlist SIGNUP_ALLOWLIST=@test.qualitrail.dev
 E2E_APP_DIR=<app dir> E2E_SERVER_LOG=<server log> node scripts/e2e-local.mjs   # refuses non-local Supabase URLs
+# Existing pages with the features off and the release's tables absent:
+#   npx supabase db reset --local --version 20261115120000, restart the app with both flags false and EMAIL_MODE=off,
+#   node scripts/e2e-degraded.mjs, then `npx supabase db reset --local` to restore the full schema.
 npx supabase stop
 ```
 
-`supabase/config.toml` is for the local stack only and changes no hosted setting.
+`supabase/config.toml` is for the local stack only and changes no hosted setting. Never run `supabase config push`: it would overwrite hosted Auth settings with these localhost values.
 
 ## Deployment checklist
 
