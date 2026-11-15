@@ -396,7 +396,7 @@ try {
   const aGet = await svApi(SV, reqA.id, "");
   const aDoc = await svApi(SV, reqA.id, "/document");
   const aDecide = await svApi(SV, reqA.id, "/respond", { decision: "confirm_documents_reviewed", agreed: true });
-  check("not shared: the supervisor sees the record but cannot open the PDF or claim a document review", aGet.status === 200 && aGet.body.hasOriginal === false && aDoc.status === 404 && aDecide.status === 403, `${aGet.status},${aDoc.status},${aDecide.status}`);
+  check("not shared: the supervisor sees the record but cannot open the PDF or claim a document review", aGet.status === 200 && aGet.body.review?.hasOriginal === false && aDoc.status === 404 && aDecide.status === 403, `${aGet.status},${aDoc.status},${aDecide.status}`);
   await SV.goto(`${APP}/supervisor/reviews/${reqA.id}`, { waitUntil: "networkidle0" });
   await SV.waitForFunction((t) => document.body.innerText.includes(t), {}, pdfA);
   const aPage = await text(SV);
@@ -460,7 +460,8 @@ try {
   await clickText(W, "Ask for review");
   await W.waitForFunction(() => document.body.innerText.includes("Awaiting supervisor"));
   const job2Id = (await admin.from("evidence").select("id").eq("worker_id", wrow.id).eq("title", job2).single()).data.id;
-  const pendingRid = (await admin.from("review_requests").select("id").eq("evidence_id", job2Id).eq("status", "pending").single()).data.id;
+  // Other records on the page already say "Awaiting supervisor", so wait for this request in the database.
+  const pendingRid = (await waitFor(async () => (await admin.from("review_requests").select("id").eq("evidence_id", job2Id).eq("status", "pending").maybeSingle()).data)).id;
   await SV.goto(`${APP}/supervisor`, { waitUntil: "networkidle0" });
   check("pending item appears in the supervisor dashboard", (await text(SV)).includes(job2));
   SV.on("dialog", (d) => d.accept());

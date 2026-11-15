@@ -16,7 +16,7 @@ const results = [];
 const check = (name, ok, detail = "") => { results.push({ ok: !!ok }); console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`); };
 
 const absent = await admin.from("signoff_requests").select("id").limit(0);
-check("precondition: the release's tables are absent", absent.error?.code === "PGRST205", absent.error?.code ?? "present");
+check("precondition: the release's tables are absent", ["PGRST205", "42P01"].includes(absent.error?.code), absent.error?.code ?? "present");
 
 const run = randomUUID().slice(0, 6);
 const email = `degraded.${run}@test.qualitrail.dev`, pw = `Pw-${randomUUID()}`;
