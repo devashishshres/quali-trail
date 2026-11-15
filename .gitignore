@@ -73,3 +73,6 @@ yarn-error.log*
 # Per-worker generated demo PDFs (rehearsal workers). Alex Morgan's top-level originals stay tracked.
 supabase/seed/files/*/
 supabase/seed/upload/*/
+
+# Local mock-delivery outbox (simulated customer messages). Never commit.
+/.signoff-outbox/

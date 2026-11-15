@@ -79,3 +79,19 @@ export function FictionalTag() {
     </span>
   );
 }
+
+/** Customer sign-off state. Deliberately not styled like "Independently confirmed". */
+export function SignoffTag({ short, tone }: { short: string; tone: "neutral" | "good" | "warn" | "simulated" }) {
+  const cls =
+    tone === "simulated"
+      ? "border-dashed border-orange text-orange-ink bg-orange-wash"
+      : tone === "warn"
+        ? "border-orange/50 text-orange-ink bg-white"
+        : "border-line text-slate bg-white";
+  return (
+    <span className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs font-medium ${cls}`}>
+      <Icon name="pen" className="size-3.5" />
+      {short}
+    </span>
+  );
+}

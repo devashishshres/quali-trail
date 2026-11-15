@@ -184,13 +184,14 @@ describe.skipIf(!ADMIN_URL)("customer sign-off (database)", () => {
     expect((await fn(db, "signoff_respond", [b.hash, sessionA, "confirm", "A Customer", null, "v1"])).ok).toBe(false);
   });
 
-  it("records a verified acknowledgment, idempotently, and refuses a conflicting second decision", async () => {
+  it("records a verified acknowledgment, repeats are idempotent, a conflicting decision is refused", async () => {
     const r = await create(await addEvidence());
     const s = await verified(r);
     const first = await fn(db, "signoff_respond", [r.hash, s, "confirm", "Casey Customer", null, "v1"]);
     expect(first).toMatchObject({ ok: true, repeated: false, status: "acknowledged" });
-    // The session is spent after a decision, so a repeat needs the same live session: re-verify.
-    const row = (await db.query("select status, email_verified_at, verified_session_id from public.signoff_requests where id=$1", [r.id])).rows[0];
+    expect(await fn(db, "signoff_respond", [r.hash, s, "confirm", "Casey Customer", null, "v1"])).toMatchObject({ ok: true, repeated: true });
+    expect((await fn(db, "signoff_respond", [r.hash, s, "decline", null, null, "v1"])).reason).toBe("already_responded");
+    const row = (await db.query("select status, email_verified_at from public.signoff_requests where id=$1", [r.id])).rows[0];
     expect(row.status).toBe("acknowledged");
     expect(row.email_verified_at).not.toBeNull();
     expect((await db.query("select count(*)::int n from public.signoff_responses where request_id=$1", [r.id])).rows[0].n).toBe(1);
@@ -204,6 +205,8 @@ describe.skipIf(!ADMIN_URL)("customer sign-off (database)", () => {
       cs.map((c, i) => fn(c, "signoff_respond", [r.hash, s, i % 2 ? "confirm" : "decline", "Casey Customer", null, "v1"])),
     );
     expect(results.filter((x) => x.ok && x.repeated === false)).toHaveLength(1);
+    // Every other submission is either an identical repeat or a refused conflict. None created a second response.
+    for (const x of results.filter((y) => !(y.ok && y.repeated === false))) expect(x.ok ? x.repeated : x.reason).toSatisfy((v: unknown) => v === true || v === "already_responded");
     expect((await db.query("select count(*)::int n from public.signoff_responses where request_id=$1", [r.id])).rows[0].n).toBe(1);
   });
 

@@ -289,7 +289,7 @@ begin
   insert into public.signoff_codes (request_id, code_hash, expires_at)
     values (r.id, p_code_hash, now() + interval '10 minutes');
   insert into public.signoff_events (request_id, event) values (r.id, 'code_issued');
-  return jsonb_build_object('ok', true, 'requestId', r.id, 'email', r.customer_email,
+  return jsonb_build_object('ok', true, 'requestId', r.id, 'workerId', r.worker_id, 'email', r.customer_email,
     'deliveryMode', r.delivery_mode, 'workerName', r.snapshot ->> 'workerName');
 end;
 $$;
@@ -402,7 +402,8 @@ begin
             nullif(btrim(coalesce(p_comment, '')), ''), p_statement_version, r.snapshot_hash, r.evidence_version, sid);
   new_status := case p_decision when 'confirm' then 'acknowledged' when 'request_correction' then 'correction_requested' else 'declined' end;
   update public.signoff_requests set status = new_status, closed_at = now() where id = r.id;
-  update public.signoff_sessions set revoked_at = now() where request_id = r.id and revoked_at is null;
+  -- The session is left to expire (30 min): it only allows reading the snapshot, and it lets an identical
+  -- repeat submission (double click, retry) return success instead of an error.
   insert into public.signoff_events (request_id, event, detail) values (r.id, 'responded', p_decision);
   return jsonb_build_object('ok', true, 'repeated', false, 'status', new_status);
 end;
@@ -499,6 +500,17 @@ begin
     select id, 'suppressed', p_reason from public.signoff_requests
      where customer_email_hash = p_email_hash and status = 'revoked' and closed_at >= now() - interval '1 second';
   return jsonb_build_object('ok', true, 'revoked', n);
+end;
+$$;
+
+-- The customer opts out from the invitation page: suppress the address and close open invitations.
+create or replace function public.signoff_opt_out(p_token_hash text)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare h text;
+begin
+  select customer_email_hash into h from public.signoff_requests where token_hash = p_token_hash;
+  if h is null then return jsonb_build_object('ok', false, 'reason', 'invalid'); end if;
+  return public.signoff_add_suppression(h, 'opt_out', null);
 end;
 $$;
 

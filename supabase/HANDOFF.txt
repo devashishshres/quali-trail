@@ -181,3 +181,9 @@ Expected after the upload (save, wait for "Searchable in memory", then "Run matc
 Excluded from judging: Jordan Rivera (rehearsal-1). Seeded before per-worker documents existed, so three stored originals (EPA card, training certificate, live-uploaded checklist) name Alex Morgan, two credential numbers were copied from Alex, the checklist's extracted metadata names Alex, and Supermemory documents were built from that metadata. He also already shows 3 of 4. Not repaired.
 
 Still pending: migration-history repair (recorded versions must be read through a database or CLI connection first), deployment, key rotation, authentication/account settings.
+
+Customer sign-off Phase 1 (branch feature/customer-signoff, PR open, not merged)
+- Adds supabase/migrations/20261116100000_customer_signoff.sql: NOT applied to the development project or any shared database. Tested only on a disposable local PostgreSQL.
+- New server code is behind SIGNOFF_ENABLED (default off) and SIGNOFF_MAIL_MODE (default off). No real email has been sent; no DNS, authentication, deployment or live seeding was done. Sam Okafor's reserved baseline, Alex and Jordan were not touched.
+- To try it locally you need the migration applied to a database the app points at; that needs separate approval for the live project.
+- Required before real customer use: Resend bounce/complaint webhook, a verified sending domain, and the retention schedule (pg_cron proposal in README, not enabled).
