@@ -2,10 +2,10 @@ import { hmac, newCode } from "@/lib/server/signoff/crypto";
 import { deliver } from "@/lib/server/email/deliver";
 import { templates } from "@/lib/server/email/templates";
 import { signoffStatus } from "@/lib/server/signoff/config";
-import { allow, appBaseUrl, clientIp, featureOn, gone, json, off, rpc, tokenHash, tooMany } from "@/lib/server/signoff/service";
+import { allow, appBaseUrl, clientIp, featureOn, gone, guarded, json, off, rpc, tokenHash, tooMany } from "@/lib/server/signoff/service";
 
 /** POST /api/signoff/code — email a one-time code to the address the worker provided (and only that address). */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   if (!featureOn()) return off();
   const status = signoffStatus();
   if (!status.ready) return off();
@@ -32,3 +32,5 @@ export async function POST(request: Request) {
   if (!sent.ok) return json({ error: { code: "internal", message: "The code couldn't be sent. Please try again in a minute." } }, 502);
   return json({ sent: true, simulated: issued.deliveryMode === "mock" });
 }
+
+export const POST = guarded(handlePOST);

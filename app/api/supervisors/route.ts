@@ -6,7 +6,7 @@ import { emailMode, emailReady } from "@/lib/server/email/config";
 import { templates } from "@/lib/server/email/templates";
 import { hmac, maskEmail, newToken, normalizeEmail } from "@/lib/server/signoff/crypto";
 import { logSignoffError } from "@/lib/server/signoff/redact";
-import { allow, appBaseUrl, rpc } from "@/lib/server/signoff/service";
+import { allow, appBaseUrl, guarded, rpc } from "@/lib/server/signoff/service";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { InviteSupervisorRequest, type WorkerRelationship } from "@/lib/types";
 
@@ -20,7 +20,7 @@ const REASON: Record<string, string> = {
 };
 
 /** GET /api/supervisors — this worker's supervisor relationships (masked addresses only). */
-export async function GET() {
+async function handleGET() {
   const ctx = await getAuthedContext();
   if (!ctx) return apiError("unauthorized", "Sign in first.");
   if (!supervisorReviewEnabled()) return ok({ enabled: false, relationships: [] });
@@ -50,7 +50,7 @@ export async function GET() {
 }
 
 /** POST /api/supervisors — invite a supervisor by email. */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const ctx = await getAuthedContext();
   if (!ctx) return apiError("unauthorized", "Sign in first.");
   if (!supervisorReviewEnabled()) return apiError("not_found", "Supervisor review isn't available.");
@@ -85,3 +85,7 @@ export async function POST(request: Request) {
     return apiError("internal", "Couldn't send the invitation.");
   }
 }
+
+export const GET = guarded(handleGET);
+
+export const POST = guarded(handlePOST);

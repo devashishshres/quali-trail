@@ -81,7 +81,7 @@ export function ReviewClient() {
           <List label="Equipment" items={s.equipment} />
           <List label="Skills" items={s.skills} />
           {review.hasOriginal && open && <button type="button" className="btn btn-secondary" onClick={viewDocument}>View supporting document</button>}
-          {!review.hasOriginal && <p className="text-sm text-slate">No supporting document is attached to this record.</p>}
+          {!review.hasOriginal && <p className="text-sm text-slate">The technician didn&apos;t share a supporting document with this request.</p>}
         </dl>
 
         {!open && (

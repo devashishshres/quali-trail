@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { getAccount } from "@/lib/api/auth";
 import { supervisorReviewEnabled } from "@/lib/server/accounts/flags";
-import { allow, clientIp, gone, json, off, rpc, tokenHash, tooMany } from "@/lib/server/signoff/service";
+import { allow, clientIp, gone, guarded, json, off, rpc, tokenHash, tooMany } from "@/lib/server/signoff/service";
 
 const Body = z.object({ accept: z.boolean() });
 const MESSAGE: Record<string, string> = {
@@ -20,7 +20,7 @@ const MESSAGE: Record<string, string> = {
  * POST /api/supervisor/invite/answer { accept } — needs the invitation token AND a signed-in account whose
  * confirmed email is the invited address. A forwarded link does nothing for anyone else.
  */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   if (!supervisorReviewEnabled()) return off();
   const a = await getAccount();
   if (!a) return json({ error: { code: "unauthorized", message: "Sign in first." } }, 401);
@@ -35,3 +35,5 @@ export async function POST(request: Request) {
   if (MESSAGE[reason]) return json({ error: { code: "forbidden", message: MESSAGE[reason], reason } }, 409);
   return gone();
 }
+
+export const POST = guarded(handlePOST);

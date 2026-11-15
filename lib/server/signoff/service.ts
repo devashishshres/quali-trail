@@ -42,15 +42,45 @@ export const tooMany = () =>
 /** True when the feature flag is on. When off, customer and worker routes behave as if they do not exist. */
 export const featureOn = () => signoffEnabled();
 
-/** Fixed-window limit on a hashed key (never a raw address or IP). Returns true when the call is allowed. */
+/** The rate limiter itself can't run (for example its table isn't installed yet). The request is refused. */
+export class LimiterUnavailableError extends Error {
+  constructor() {
+    super("rate limiter unavailable");
+  }
+}
+
+/**
+ * Fixed-window limit on a hashed key (never a raw address or IP). Returns true when the call is allowed and false
+ * when the caller is over the limit. If the limiter can't run, it FAILS CLOSED by throwing LimiterUnavailableError,
+ * which `guarded` turns into a "temporarily unavailable" answer instead of a misleading "too many attempts".
+ */
 export async function allow(kind: string, rawKey: string, windowSeconds: number, max: number): Promise<boolean> {
   const r = await createAdminClient().rpc("signoff_hit_rate_limit", {
     p_key_hash: hmac("rate", `${kind}:${rawKey}`),
     p_window_seconds: windowSeconds,
     p_max: max,
   });
-  // If the limiter itself fails, fail closed.
-  return !r.error && r.data === true;
+  if (r.error || typeof r.data !== "boolean") {
+    logSignoffError("rate-limiter", new Error(`unavailable (code ${r.error?.code ?? "no result"})`));
+    throw new LimiterUnavailableError();
+  }
+  return r.data;
+}
+
+export const UNAVAILABLE_MESSAGE = "This isn't available right now because setup on this server is incomplete. Please try again later.";
+export const setupIncomplete = () =>
+  NextResponse.json({ error: { code: "unavailable", message: UNAVAILABLE_MESSAGE } }, { status: 503, headers: NO_STORE });
+
+/** Wraps a route handler so a missing rate limiter answers 503 "setup incomplete". Every other error is rethrown. */
+export function guarded<A extends unknown[]>(handler: (...args: A) => Promise<Response>) {
+  return async (...args: A): Promise<Response> => {
+    try {
+      return await handler(...args);
+    } catch (e) {
+      if (e instanceof LimiterUnavailableError) return setupIncomplete();
+      throw e;
+    }
+  };
 }
 
 /**

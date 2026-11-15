@@ -1,8 +1,8 @@
-import { allow, clientIp, gone, json, off, rpc, tokenHash, tooMany } from "@/lib/server/signoff/service";
+import { allow, clientIp, gone, guarded, json, off, rpc, tokenHash, tooMany } from "@/lib/server/signoff/service";
 import { supervisorReviewEnabled } from "@/lib/server/accounts/flags";
 
 /** POST /api/supervisor/invite/peek — who invited you (name + masked address). Nothing else. */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   if (!supervisorReviewEnabled()) return off();
   if (!(await allow("sup-peek-ip", await clientIp(), 600, 60))) return tooMany();
   const th = await tokenHash(request);
@@ -11,3 +11,5 @@ export async function POST(request: Request) {
   if (!r.ok) return gone();
   return json({ status: r.status, workerName: r.workerName ?? null, emailHint: r.emailHint ?? null, answered: r.answered === true });
 }
+
+export const POST = guarded(handlePOST);

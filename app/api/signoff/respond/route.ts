@@ -1,7 +1,7 @@
 import { STATEMENT_VERSION } from "@/lib/server/signoff/statement";
 import { notifyCustomerDecision } from "@/lib/server/signoff/notify";
 import { logSignoffError } from "@/lib/server/signoff/redact";
-import { allow, clientIp, featureOn, gone, json, off, rpc, sessionHash, tokenHash, tooMany } from "@/lib/server/signoff/service";
+import { allow, clientIp, featureOn, gone, guarded, json, off, rpc, sessionHash, tokenHash, tooMany } from "@/lib/server/signoff/service";
 import { RespondRequest } from "@/lib/types";
 
 const CLOSED: Record<string, string> = {
@@ -13,7 +13,7 @@ const CLOSED: Record<string, string> = {
 };
 
 /** POST /api/signoff/respond — records ONE decision. Repeat or concurrent submissions cannot create a second one. */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   if (!featureOn()) return off();
   if (!(await allow("respond-ip", await clientIp(), 600, 30))) return tooMany();
   const [th, sh] = [await tokenHash(request), await sessionHash()];
@@ -43,3 +43,5 @@ export async function POST(request: Request) {
   if (CLOSED[reason]) return json({ error: { code: "forbidden", message: CLOSED[reason], reason } }, 409);
   return gone();
 }
+
+export const POST = guarded(handlePOST);

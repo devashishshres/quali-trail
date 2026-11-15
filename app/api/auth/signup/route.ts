@@ -2,7 +2,7 @@ import { apiError, fieldErrors, ok } from "@/lib/api/responses";
 import { mayRegister, safeNext } from "@/lib/server/accounts/policy";
 import { hasPendingInvite } from "@/lib/server/accounts/roles";
 import { configProblems, describeProblems } from "@/lib/server/config";
-import { allow, clientIp } from "@/lib/server/signoff/service";
+import { allow, clientIp, guarded } from "@/lib/server/signoff/service";
 import { logSignoffError } from "@/lib/server/signoff/redact";
 import { createUserClient } from "@/lib/supabase/server";
 import { SignupRequest } from "@/lib/types";
@@ -14,7 +14,7 @@ const SENT = "If this address can register, we've sent a confirmation link to it
  * The answer is the same whether or not the address may register or already has an account (no enumeration).
  * Runs through the cookie-bound client so the confirmation link completes in this browser (PKCE).
  */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const body = SignupRequest.safeParse(await request.json().catch(() => null));
   if (!body.success) return apiError("validation_failed", "Check the highlighted fields.", fieldErrors(body.error));
   const pepperProblem = configProblems().filter((p) => p.name === "SIGNOFF_PEPPER");
@@ -48,3 +48,5 @@ export async function POST(request: Request) {
   }
   return ok({ message: SENT });
 }
+
+export const POST = guarded(handlePOST);

@@ -1,14 +1,14 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { hmac, newSessionToken } from "@/lib/server/signoff/crypto";
-import { NO_STORE, SESSION_COOKIE, allow, clientIp, featureOn, gone, off, rpc, tokenHash, tooMany } from "@/lib/server/signoff/service";
+import { NO_STORE, SESSION_COOKIE, allow, clientIp, featureOn, gone, guarded, off, rpc, tokenHash, tooMany } from "@/lib/server/signoff/service";
 
 const Body = z.object({ code: z.string().regex(/^\d{6}$/) });
 
 const BAD = () => NextResponse.json({ error: { code: "validation_failed", message: "That code didn't work. Check the newest email, or ask for a new code." } }, { status: 400, headers: NO_STORE });
 
 /** POST /api/signoff/verify { code } — on success sets an HttpOnly session cookie bound to this one invitation. */
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   if (!featureOn()) return off();
   const th = await tokenHash(request);
   if (!th) return gone();
@@ -29,3 +29,5 @@ export async function POST(request: Request) {
   });
   return res;
 }
+
+export const POST = guarded(handlePOST);
