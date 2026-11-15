@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="QualiTrail">
+  <title>QualiTrail</title>
+  <!--
+    A trail of records rising over time: three points joined by a path, the most recent one largest.
+    Deliberately NOT a checkmark (the product never claims a person is verified) and NOT the hazard
+    stripes from globals.css (those mark sample data). Brand navy #142d3d, brand orange #ff8a3d.
+  -->
+  <rect width="32" height="32" rx="7" fill="#142d3d"/>
+  <path d="M8.5 23 L16 16 L23.5 9" fill="none" stroke="#ff8a3d" stroke-width="1.75"
+        stroke-linecap="round" stroke-linejoin="round" opacity="0.45"/>
+  <circle cx="8.5" cy="23" r="2.1" fill="#ff8a3d"/>
+  <circle cx="16" cy="16" r="2.6" fill="#ff8a3d"/>
+  <circle cx="23.5" cy="9" r="3.6" fill="#ff8a3d"/>
+</svg>
