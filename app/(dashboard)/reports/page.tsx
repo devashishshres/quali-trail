@@ -149,7 +149,10 @@ function Packet({ worker, evidence, opportunity }: { worker: Worker; evidence: E
 
         {(worker.isSynthetic || opportunity.isSynthetic) && (
           <p className="mt-4 flex items-center gap-2 text-sm">
-            <FictionalTag /> The technician, employer and records in this packet are invented for a demonstration.
+            <FictionalTag />{" "}
+            {worker.isSynthetic
+              ? "The technician, employer and records in this packet are invented for a demonstration."
+              : "The job posting is a fictional sample you chose to add. Your own records are real."}
           </p>
         )}
 
