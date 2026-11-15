@@ -13,6 +13,8 @@
  * a *direct* one: direct needs an accepted type AND content checks below.
  */
 import { contributionText, relationshipText, termsClause } from "./explain";
+import { REVIEW_REASON_TEXT } from "../opportunities/requirement-rules";
+import { GAP_AMBIGUOUS, GAP_CONFIRMATION, gapAmbiguousUncertainty, gapIncomplete, gapNoRecord } from "@/lib/next-steps";
 import type {
   Evidence,
   EvidenceAssessment,
@@ -20,6 +22,7 @@ import type {
   EvidenceRole,
   Requirement,
   RequirementResult,
+  RuleCondition,
   VerificationStatus,
 } from "@/lib/types";
 
@@ -116,7 +119,30 @@ function isExpired(e: Evidence, today: string): boolean {
   return exp !== null && exp < today;
 }
 
-function classify(req: Requirement, c: Candidate, today: string): Verdict {
+/**
+ * Rule-condition options. `checkText` replaces the requirement wording for the text-triggered checks below
+ * (subject, scope, commissioning), so a condition is checked against its own catalog meaning. `termGroups`
+ * are scope terms the record must state; a missing group makes the record incomplete, never direct.
+ */
+interface ClassifyOptions {
+  checkText?: string;
+  termGroups?: string[][];
+}
+
+/**
+ * Record text for term groups: the record's HEADLINE only (title, skills, activities), minus any segment that
+ * negates ("did not install"). A summary or equipment list that merely mentions a term ("startup was done by
+ * another crew") is not the record stating it did that work, so it can never satisfy a scope term.
+ */
+function affirmedText(e: Evidence): string {
+  const d = e.structuredData;
+  const segments = [e.title, ...d.skills, ...d.activities];
+  return segments.map(norm).filter((s) => s && !/\b(?:not|never|no|without)\b/.test(s)).join(" \n ");
+}
+
+const hasTerm = (text: string, term: string) => new RegExp(`\\b${escapeRe(norm(term))}(?![a-z0-9])`).test(text);
+
+function classify(req: Requirement, c: Candidate, today: string, opts: ClassifyOptions = {}): Verdict {
   const { criteria } = req;
   const e = c.evidence;
   const text = recordText(e);
@@ -138,7 +164,7 @@ function classify(req: Requirement, c: Candidate, today: string): Verdict {
   const keywordHit = criteria.keywords.some((k) => hasKeyword(text, k));
   const headline = headlineText(e);
   const headlineHit = criteria.keywords.some((k) => hasKeyword(headline, k));
-  const reqNorm = norm(req.originalText);
+  const reqNorm = norm(opts.checkText ?? req.originalText);
   // Subject check: a heat-pump requirement is not met by a generic record.
   const subjectOk = !HEAT_PUMP.test(reqNorm) || HEAT_PUMP.test(text);
   const topical = subjectOk && (keywordHit || (c.memorySimilarity ?? 0) >= SUPPORT_MIN_SIMILARITY);
@@ -153,7 +179,7 @@ function classify(req: Requirement, c: Candidate, today: string): Verdict {
     return { kind: "supporting", why: "Relevant to the topic, but its content does not state what the requirement asks for." };
   }
 
-  const scope = credentialScope(req.originalText, text);
+  const scope = credentialScope(opts.checkText ?? req.originalText, text);
   if (scope === "wrong") {
     return { kind: "wrong_scope", reason: "The credential type stated on this record is not one the requirement accepts." };
   }
@@ -187,6 +213,13 @@ function classify(req: Requirement, c: Candidate, today: string): Verdict {
     if (!startup) missing.push("documented startup work performed");
   }
 
+  if (opts.termGroups?.length) {
+    const affirmed = affirmedText(e);
+    for (const group of opts.termGroups) {
+      if (!group.some((t) => hasTerm(affirmed, t))) missing.push(`"${group.length > 1 ? `${group[0]}" (or ${group.slice(1).map((t) => `"${t}"`).join(", ")})` : `${group[0]}"`}`);
+    }
+  }
+
   if (missing.length > 0) return { kind: "incomplete", missing };
 
   // The requirement's terms appear only in secondary text (summary, issuer,
@@ -196,7 +229,7 @@ function classify(req: Requirement, c: Candidate, today: string): Verdict {
     return {
       kind: "incomplete",
       missing: [],
-      ambiguous: "The requirement's terms appear only in this record's summary or secondary details, not in its title, skills or activities.",
+      ambiguous: GAP_AMBIGUOUS,
     };
   }
   return { kind: "direct", notes: [] };
@@ -242,7 +275,7 @@ function dedupe(candidates: Candidate[]): Candidate[] {
 const bySimilarityThenDate = (a: EvidenceConnection, b: EvidenceConnection) =>
   (b.memorySimilarity ?? -1) - (a.memorySimilarity ?? -1) || (b.evidenceDate ?? "").localeCompare(a.evidenceDate ?? "");
 
-export function evaluateRequirement(req: Requirement, candidates: Candidate[], today: string): RequirementResult {
+function evaluateBasic(req: Requirement, candidates: Candidate[], today: string, opts: ClassifyOptions = {}): RequirementResult {
   const direct: EvidenceConnection[] = []; // complete direct records
   const incomplete: EvidenceConnection[] = []; // right type, key facts missing
   const directDocumented: EvidenceConnection[] = [];
@@ -255,7 +288,7 @@ export function evaluateRequirement(req: Requirement, candidates: Candidate[], t
   const related: { e: Evidence; terms: string[]; direct: boolean }[] = [];
 
   for (const c of dedupe(candidates)) {
-    const v = classify(req, c, today);
+    const v = classify(req, c, today, opts);
     const e = c.evidence;
     const terms = matchedTerms(req, e);
     switch (v.kind) {
@@ -278,13 +311,13 @@ export function evaluateRequirement(req: Requirement, candidates: Candidate[], t
       case "incomplete": {
         sawIncomplete = true;
         if (v.ambiguous) {
-          uncertainties.push(clip(`"${e.title}": ${v.ambiguous} Please confirm it covers the requirement.`, 500));
+          uncertainties.push(clip(gapAmbiguousUncertainty(e.title), 500));
           incomplete.push(connection(c, "direct", contributionText(e, terms, "incomplete"), `${v.ambiguous} ${termsClause(terms)}`));
           related.push({ e, terms, direct: true });
           break;
         }
         const what = v.missing.join(", ");
-        missingDocumentation.push(clip(`"${e.title}" does not state ${what}.`, 500));
+        missingDocumentation.push(clip(gapIncomplete(e.title, what), 500));
         incomplete.push(
           connection(c, "direct", contributionText(e, terms, "incomplete"), `It is the type of record the requirement asks for, but it does not state ${what}. ${termsClause(terms)}`),
         );
@@ -314,24 +347,24 @@ export function evaluateRequirement(req: Requirement, candidates: Candidate[], t
     assessment = "needs_review";
     explanation = "A record describes relevant work or credentials, but it is self-reported with no supporting document.";
     uncertainties.push("The matching record is self-reported.");
-    missingDocumentation.push("A supporting document or independent confirmation for this record");
+    missingDocumentation.push(GAP_CONFIRMATION);
   } else if (sawIncomplete) {
     assessment = "needs_review";
     explanation = "A record of the right kind exists, but it is missing details or is ambiguous, so a person should review it.";
   } else if (supporting.length > 0 && !sawWrongScope) {
     assessment = "no_sufficient_evidence";
     explanation = "Related records were found, but none is the kind of documentation this requirement asks for.";
-    missingDocumentation.push(`A record that directly documents: ${clip(req.originalText, 200)}`);
+    missingDocumentation.push(gapNoRecord(clip(req.originalText, 200)));
   } else if (sawWrongScope) {
     assessment = "no_sufficient_evidence";
     explanation = "A related credential was found, but its type is not one the requirement accepts.";
-    missingDocumentation.push(`A record that directly documents: ${clip(req.originalText, 200)}`);
+    missingDocumentation.push(gapNoRecord(clip(req.originalText, 200)));
   } else {
     assessment = "no_sufficient_evidence";
     explanation = sawExpired
       ? "The only matching record is expired or invalid."
       : "No sufficient documentation was found for this requirement.";
-    missingDocumentation.push(`A record that directly documents: ${clip(req.originalText, 200)}`);
+    missingDocumentation.push(gapNoRecord(clip(req.originalText, 200)));
   }
 
   const relationship = relationshipText(related);
@@ -350,4 +383,99 @@ export function evaluateRequirement(req: Requirement, candidates: Candidate[], t
     uncertainties: [...new Set(uncertainties)],
     missingDocumentation: [...new Set(missingDocumentation)],
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Imported requirements: rule routing                                 */
+/* ------------------------------------------------------------------ */
+
+const RANK: Record<EvidenceAssessment, number> = { no_sufficient_evidence: 0, needs_review: 1, evidence_found: 2, cannot_assess: -1 };
+
+/** The condition as its own requirement: its own types, keywords and fields; the real id and wording. */
+function conditionRequirement(req: Requirement, c: RuleCondition): Requirement {
+  return {
+    ...req,
+    originalText: c.label,
+    criteria: {
+      acceptedTypes: c.acceptedTypes,
+      supportingTypes: c.supportingTypes,
+      keywords: c.keywords,
+      retrievalQuery: c.retrievalQuery,
+      requiredFields: c.requiredFields,
+    },
+  };
+}
+
+/** Checks one condition. Scope is enforced by term groups, so the check text is the condition's unscoped keywords. */
+function evaluateCondition(req: Requirement, c: RuleCondition, candidates: Candidate[], today: string): RequirementResult {
+  return evaluateBasic(conditionRequirement(req, c), candidates, today, { checkText: c.keywords.join(" "), termGroups: c.termGroups });
+}
+
+/** One record, one link: direct wins over supporting; best similarity kept. */
+function mergeConnections(lists: EvidenceConnection[][]): EvidenceConnection[] {
+  const byId = new Map<string, EvidenceConnection>();
+  for (const c of lists.flat()) {
+    const prev = byId.get(c.evidenceId);
+    if (!prev || (prev.role === "supporting" && c.role === "direct")) byId.set(c.evidenceId, c);
+  }
+  return [...byId.values()].sort((a, b) => (a.role === b.role ? bySimilarityThenDate(a, b) : a.role === "direct" ? -1 : 1));
+}
+
+/**
+ * Supported rule: every condition is checked separately and the requirement takes the WEAKEST result
+ * (all-of). A record that covers one part never counts for the whole line.
+ */
+function evaluateSupported(req: Requirement, conditions: RuleCondition[], candidates: Candidate[], today: string): RequirementResult {
+  const parts = conditions.map((c) => ({ c, r: evaluateCondition(req, c, candidates, today) }));
+  const worst = parts.reduce((w, p) => (RANK[p.r.assessment] < RANK[w.r.assessment] ? p : w), parts[0]);
+  const explanation =
+    parts.length === 1
+      ? worst.r.explanation
+      : `This requirement has ${parts.length} parts, and each is checked on its own; the overall result is the weakest part. ${parts
+          .map((p) => `${p.c.label}: ${p.r.explanation}`)
+          .join(" ")}`;
+  return {
+    requirementId: req.id,
+    originalText: req.originalText,
+    mandatory: req.mandatory,
+    assessment: worst.r.assessment,
+    connections: mergeConnections(parts.map((p) => p.r.connections)),
+    explanation: clip(explanation, 2000),
+    uncertainties: [...new Set(parts.flatMap((p) => p.r.uncertainties.map((u) => clip(parts.length > 1 ? `${p.c.label}: ${u}` : u, 500))))],
+    missingDocumentation: [...new Set(parts.flatMap((p) => p.r.missingDocumentation.map((m) => clip(parts.length > 1 ? `${p.c.label}: ${m}` : m, 500))))],
+  };
+}
+
+/**
+ * Review-only rule: never decided automatically. Records related to any recognised part are shown as
+ * supporting context only, and nothing is listed as missing.
+ */
+function evaluateReviewOnly(req: Requirement, rule: Extract<NonNullable<Requirement["criteria"]["rule"]>, { kind: "review_only" }>, candidates: Candidate[], today: string): RequirementResult {
+  const parts = rule.partial.map((c) => ({ c, r: evaluateCondition(req, c, candidates, today) }));
+  const connections = mergeConnections(parts.map((p) => p.r.connections)).map((c) => ({
+    ...c,
+    role: "supporting" as const,
+    relevanceExplanation: clip(`Shown for context only; this requirement is not assessed automatically. ${c.relevanceExplanation}`, 1000),
+  }));
+  const reasons = rule.reasons.map((r) => REVIEW_REASON_TEXT[r]);
+  const context = parts.length
+    ? ` For context, QualiTrail recognised part of the wording: ${parts.map((p) => `${p.c.label} (${p.r.assessment.replace(/_/g, " ")})`).join("; ")}. That part alone does not decide this requirement.`
+    : "";
+  return {
+    requirementId: req.id,
+    originalText: req.originalText,
+    mandatory: req.mandatory,
+    assessment: "cannot_assess",
+    connections,
+    explanation: clip(`Not assessed automatically. ${reasons.join(" ")}${context} Compare your records with this requirement yourself, or ask the employer.`, 2000),
+    uncertainties: reasons.map((r) => clip(r, 500)),
+    missingDocumentation: [],
+  };
+}
+
+export function evaluateRequirement(req: Requirement, candidates: Candidate[], today: string): RequirementResult {
+  const rule = req.criteria.rule;
+  if (!rule) return evaluateBasic(req, candidates, today);
+  if (rule.kind === "supported") return evaluateSupported(req, rule.conditions, candidates, today);
+  return evaluateReviewOnly(req, rule, candidates, today);
 }

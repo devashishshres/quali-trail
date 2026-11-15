@@ -155,6 +155,8 @@ E2E_APP_DIR=<app dir> E2E_SERVER_LOG=<server log> node scripts/e2e-local.mjs   #
 # Existing pages with the features off and the release's tables absent:
 #   npx supabase db reset --local --version 20261115120000, restart the app with both flags false and EMAIL_MODE=off,
 #   node scripts/e2e-degraded.mjs, then `npx supabase db reset --local` to restore the full schema.
+# Job import journey (stub listings, no providers): start the app with OPPORTUNITY_IMPORT_ENABLED=true TINYFISH_MODE=stub
+#   GEMINI_API_KEY=<any placeholder>, then with the same environment: npx tsx scripts/e2e-import.mts
 npx supabase stop
 ```
 
@@ -173,7 +175,7 @@ Not deployed yet. Before hosting, and after approval of each action:
 
 ## Limits
 
-- Matching rules are written for the seeded heat-pump requirements; arbitrary job postings are not supported yet.
+- Matching rules are written for the seeded heat-pump requirements. Imported job postings (feature-flagged, see docs/JOB_IMPORT.txt) are assessed only where a line matches a small explicit rule catalog; everything else is shown as "Can't assess automatically".
 - Work records and checklists can be edited; certifications, training and other types cannot yet, records that are independently confirmed cannot be edited, and nothing can be deleted.
 - Supervisor review and customer acknowledgment are deliberately not verification: nothing becomes *independently confirmed* through the app, and there is no issuer workflow.
 - Sign-up is invite-only by default (`SIGNUP_MODE`); there is no password-reset page yet. No organization or employer accounts.

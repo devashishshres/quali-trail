@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AttestationSummary, Evidence } from "@/lib/types";
 import { attestationTags } from "@/lib/client/attestation-labels";
 import { api, openOriginal, toApiError } from "@/lib/client/api";
@@ -36,6 +36,21 @@ function EvidenceItem({ evidence: e, attestations, onChanged }: { evidence: Evid
   const [editing, setEditing] = useState(false);
   const canEdit = !FIXTURE_MODE && SIGNOFF_TYPES.includes(e.type) && EDITABLE.includes(e.verificationStatus);
   const sd = e.structuredData;
+  const details = useRef<HTMLDetailsElement>(null);
+
+  // A link to "#evidence-<id>" (e.g. from "Your next steps") opens this record so its details and panels are visible.
+  // Opening only shows the record; it never starts a request.
+  useEffect(() => {
+    const openIfTargeted = () => {
+      if (window.location.hash === `#evidence-${e.id}` && details.current) {
+        details.current.open = true;
+        details.current.closest("li")?.scrollIntoView({ block: "start" });
+      }
+    };
+    openIfTargeted();
+    window.addEventListener("hashchange", openIfTargeted);
+    return () => window.removeEventListener("hashchange", openIfTargeted);
+  }, [e.id]);
 
   async function retry() {
     setRetrying(true);
@@ -51,7 +66,7 @@ function EvidenceItem({ evidence: e, attestations, onChanged }: { evidence: Evid
 
   return (
     <li id={`evidence-${e.id}`} className="scroll-mt-24 py-4 target:bg-orange-wash">
-      <details className="group">
+      <details ref={details} className="group">
         <summary className="grid cursor-pointer list-none grid-cols-[1fr_auto] gap-x-4 gap-y-2 sm:grid-cols-[7.5rem_1fr_auto]">
           <span className="text-sm font-medium text-slate sm:pt-0.5">{formatDate(e.date)}</span>
           <span className="col-span-2 min-w-0 sm:col-span-1">

@@ -16,6 +16,7 @@ import type {
   ListOpportunitiesResponse,
   MatchRunResponse,
   ReindexResponse,
+  RunExplanations,
 } from "@/lib/types";
 import { ApiRequestError, toApiError } from "./errors";
 import { fixtureApi } from "./fixtures";
@@ -83,6 +84,12 @@ const liveApi = {
 export type Api = typeof liveApi;
 
 export const api: Api = FIXTURE_MODE ? fixtureApi : liveApi;
+
+/**
+ * Ask for "Related evidence — AI-assisted explanation" for one saved run. A separate layer: it never changes the
+ * run's checked results. Not available in fixture mode.
+ */
+export const explainMatch = (runId: string) => request<{ explanations: RunExplanations }>(`/api/matches/${runId}/explanations`, { method: "POST" });
 
 /**
  * Open an evidence record's original document. The signed URL lives 60 s,

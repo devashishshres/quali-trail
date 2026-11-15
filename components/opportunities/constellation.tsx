@@ -17,6 +17,7 @@ const ASSESSMENT_STROKE = {
   evidence_found: "var(--color-teal)",
   needs_review: "var(--color-orange)",
   no_sufficient_evidence: "#8aa0ad",
+  cannot_assess: "#c9d4dc",
 } as const;
 
 function edgePath(x: number, y: number) {

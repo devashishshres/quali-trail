@@ -1,0 +1,415 @@
+# Job import (feature-flagged, off by default)
+
+## HANDOFF (updated 2026-11-15): read this first
+
+**Branch:** `feature/job-import` (draft PR #11, unmerged). Commits: `d856bd0` feature, `629a7a9` follow-up checks,
+`552ef01` "Your next steps", then the AI-assisted explanation layer (see "Status" and the data-boundary section).
+Work continues on the original Mac; the other-laptop transfer is no longer needed.
+
+### Status
+
+Done (on the branch, flag off by default):
+- Import by public listing URL (TinyFish Fetch, URL only) or pasted text; verbatim requirement lines; review
+  (priority, display wording, remove, manual-review mark); atomic confirm; "Your evidence fit" summary; report.
+- Deterministic rule catalog, `cannot_assess` everywhere, priority read from listing wording, headline-only term
+  matching (install-only evidence never satisfies install-and-startup), plain-text listings, flag-off behaviour.
+- **"Your next steps"** (see the section below): fit summary, selected requirement and printable report.
+- **"Related evidence — AI-assisted explanation"** (separate flag, off by default; see "AI-assisted explanation: data
+  boundary"): explains `cannot_assess` lines from the technician's own related records; never changes checked results.
+  Tested with local stubs only.
+
+Pending: the live provider acceptance test, then release (both below; each step needs approval).
+
+### Checks actually run for the explanation layer (isolated local stack, ALL providers stubbed)
+
+- Full vitest suite including DB tests: 614/614 (42 files); typecheck, lint and production build clean.
+- `scripts/e2e-import.mts explain`: **45/45** (fictional technicians; supported, partial, assisted, done-by-others,
+  not-done, summary-only, unrelated, absent evidence; eligibility lines; unknown reference withholds the whole line;
+  fulfilment claim, unbacked worker claim and contradiction withheld; model failure; 3 parallel requests and a triple
+  click → one generation; out-of-date display after a record change; stale and foreign runs refused; checked
+  results, links, verification statuses and counts byte-identical before/after; report section prints without
+  links). Flag-on 57/57 with explanations on, flag-off 17/17, `e2e-local.mjs` 95/95.
+- No live Gemini, Supermemory or TinyFish call was made. The explanations migration is applied LOCALLY only.
+
+### Checks actually run (on 552ef01, isolated local stack, all providers stubbed)
+
+- `npm test` 394 passed (17 new in `tests/next-steps.test.ts`); typecheck, lint and production build clean.
+- DB tests on the local Supabase CLI Postgres (port 54322): 90/90.
+- `scripts/e2e-import.mts`: **57/57** flag on (sign-off/review off), **16/16** flag off (sign-off/review on, simulated
+  email). Both phases ran on the final build with a fresh fictional user. `scripts/e2e-local.mjs` (whole app,
+  including sign-off and supervisor review): **95/95**.
+- Next-steps checks in those runs: one step per gap, required first; the found line has no step; the confirm step
+  offers supervisor/customer only when those flows are on; following its link opens that record's existing panels
+  with **no write requests and no new sign-off or review requests**; the licence line gets manual clarification
+  quoting the stored reason; no lack-of-ability, course or hiring wording; the report prints the section without
+  links; a run stored with older-format strings produces the same steps, and an unknown string is shown as written.
+- **Limitations (stubbed, not live):** TinyFish and Gemini were stubs. Supermemory is unavailable locally, so
+  local match runs are labelled fixtures from the real evaluator, not real memory-backed runs. Nothing touched the
+  hosted project in this round. (Earlier: one read-only check of the test technician's two records, both `indexed`.)
+
+### Hosted database and live test (2026-11-15, approved)
+
+- Backup: `~/qualitrail-backups/20261115T134044Z-pre-import-explanations/` (roles, schema, data, migration history).
+- Dry run: exactly `20261118100000` and `20261119100000` pending; both replayed on the restored hosted schema; DB tests
+  23/23. Applied with `supabase db push`; installed versions now end at `20261119100000`. Existing data unchanged.
+- Scope (from the SQL): new tables `opportunity_imports`, `match_run_explanations`; 9 nullable/defaulted columns on
+  `opportunities`, 5 nullable columns on `requirements`; `requirement_results_assessment_check` replaced by a superset
+  adding `cannot_assess`; 11 service-role-only functions. Nothing dropped except that one replaced check.
+- Live test as "Inbox A Test (fictional)" on the Lever listing: TinyFish 1, Gemini 2, Supermemory 23 searches (0
+  retries, 0 writes, 0 emails). Job `c5a0ab5b…`: 12 lines, EPA 608 honestly "no sufficient evidence", 11
+  `cannot_assess`. Explanation: 3 eligibility, 8 sent to the AI: 3 accepted, 5 withheld (`worker_claim`; 4 are false
+  positives from "ability" wording in the AI's restatement of the line). UI acceptance 18/18; report printable.
+- Production code, Vercel settings and flags unchanged. PR #11 unmerged.
+
+### Accuracy fixes after the live test
+
+Each live problem has a synthetic regression fixture in `tests/explanations/live-regressions.test.ts`:
+- "Verified refrigerant charge…" counted as charging → now `checked_only`, stated as a limitation.
+- Unrelated records linked to "ServiceTitan knowledge preferred" and the HVAC electrical line by similarity/title →
+  relevance now needs a related line in the record's permitted fields; similarity only orders.
+- "Installation documented" on the team, wiring-diagram and diagnosing lines via "installation team / instructions /
+  -related" → modifier uses are not tasks.
+- 4 false `worker_claim` withholds from the AI restating the line → the model no longer restates it, and the
+  employer's own wording is masked before the ability/fulfilment checks.
+- Duplicated unclear points and next steps → deduplicated; shared next steps listed once.
+- SIGNOFF_PEPPER missing from `.env.local` → documented as required (see Environment variable names).
+Local results: unit/integration 651/651; tsc and eslint clean; isolated e2e: explain 46/46, flag-on 57/57,
+flag-off 17/17, e2e-local 95/95.
+
+### Focused live retest (2026-11-15, approved)
+
+- Test-account password rotated first (the old value had been exposed in tool output): project, account and exact
+  fictional profile verified; new value stored only in the private files; sign-in verified. The password change
+  invalidated existing sessions (a session opened before the change could no longer refresh).
+- One new match run (`747395d6…`) and one explanation on job `c5a0ab5b…`, through a local production build with a
+  request guard. Outbound: Supermemory 23 search requests (limit 46, reads only), Gemini 1 (limit 3), TinyFish 0,
+  email 0; nothing blocked. One extra explanation attempt was refused by the app's own daily limit before any call
+  (the limit was set to 1 and an explanation already existed that day); nothing was saved by it.
+- Results: assessments unchanged (EPA 608 no sufficient evidence, 11 `cannot_assess`, 0 evidence found). Explanation:
+  AI ok, 0 rejected references, 0 withheld (was 5). Charging shown as checked only; ServiceTitan and electrical lines
+  link nothing; no "Installation documented" on the team, wiring-diagram or diagnosing lines; no duplicates; the
+  shared no-related step shown once (6 lines). UI acceptance 24/24, including suggested actions and the printable
+  report (links hidden in print).
+- Writes: +1 match run, +12 results, +2 evidence links, +1 explanation, +1 rate-limit row. No evidence, profile,
+  opportunity, email or sign-off changes. Alex, Jordan and Sam unchanged (Sam 2 of 4).
+- Known limit: a quote shows at most 3 lines per record, so a documented task can be in the task check but not in
+  that record's quote (here "startup documented"; "Started up the system" is the record's 4th related line).
+
+### WARNING: local configuration touches hosted data
+
+The private `.env.local` used for development points at the hosted Supabase project `ighnwgkqvajfkhmopttg`, which
+also serves production. Anything done in a local app with it (sign-in, matching, edits, imports) reads and writes
+hosted data. Use only the fictional test technician ("Inbox A Test (fictional)"). Keep EMAIL_MODE=off,
+SIGNOFF_ENABLED=false, SUPERVISOR_REVIEW_ENABLED=false, OPPORTUNITY_IMPORT_ENABLED=false unless an approved step says
+otherwise. Never run `supabase config push`, `supabase db push`, deploys or Vercel env changes without approval.
+
+### Preserve the demo baseline
+
+Do not sign in as, edit, re-match or delete **Alex Morgan, Jordan Rivera or Sam Okafor**. Sam (rehearsal-2) is reserved
+at the 2-of-4 baseline. Use separate fictional test identities. Do not delete test accounts, test records, partner
+records or backups without approval. Never reset Git history or roll back the database automatically.
+
+### Environment variable names (values only in the private file, never in Git)
+
+Hosted-dev work: `NEXT_PUBLIC_DATA_MODE`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`,
+`SUPABASE_SECRET_KEY`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_FALLBACK_MODELS`, `SUPERMEMORY_API_KEY`,
+`SUPERMEMORY_NAMESPACE_PREFIX`, `DEMO_USER_EMAIL`, `DEMO_USER_PASSWORD`, `EMAIL_MODE`, `SIGNOFF_ENABLED`,
+`SUPERVISOR_REVIEW_ENABLED`, `SIGNUP_MODE`, `APP_BASE_URL`, `SIGNOFF_PEPPER`, `OPPORTUNITY_IMPORT_ENABLED`,
+`TINYFISH_MODE`, `IMPORT_DAILY_LIMIT`, `TINYFISH_API_KEY`.
+Not available on the original laptop (not invented): `SIGNOFF_PEPPER` and `TINYFISH_API_KEY` (the user adds the
+TinyFish key to `.env.local` when a live test is approved).
+
+`SIGNOFF_PEPPER` is REQUIRED for import and explanation rate limiting (both features report a configuration problem
+and stay off without it), as well as sign-up, password reset and onboarding. It is absent from the hosted-dev
+`.env.local`. Never copy, replace or rotate production's pepper for development. For isolated local work, keep a
+SEPARATE persistent local value outside the repo, e.g. `~/.config/qualitrail/isolated-local.env` (mode 600, created
+once with `openssl rand -hex 32`, never printed), and load it with `set -a; . <that file>; set +a`. A hosted-dev test
+needs its own approved, non-production value.
+Resend variables are deliberately omitted locally (email off).
+
+### Fresh-laptop setup
+
+Needs Node 24, Git, GitHub CLI (`gh auth login`), Docker (only for the isolated local stack).
+
+    git clone https://github.com/tharunvimalaa/sun-hacks-26.git
+    cd sun-hacks-26
+    git checkout feature/job-import
+    npm ci
+    # place the privately transferred .env.local at the repo root, then:
+    chmod 600 .env.local
+    npm test && npm run typecheck && npm run lint
+
+Run against hosted dev data (see WARNING): `npm run dev` → http://localhost:3000.
+
+Isolated local stack (no hosted data, no providers):
+
+    npx supabase start                         # Docker; API 54321, DB 54322
+    npx supabase status -o env                 # local-only keys for the variables below
+    # In a shell WITHOUT the hosted .env.local values exported:
+    export NEXT_PUBLIC_DATA_MODE=live NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<local publishable key> SUPABASE_SECRET_KEY=<local secret key> \
+      APP_BASE_URL=http://localhost:3100 SIGNUP_MODE=closed \
+      SIGNOFF_ENABLED=false SUPERVISOR_REVIEW_ENABLED=false EMAIL_MODE=off \
+      OPPORTUNITY_IMPORT_ENABLED=true TINYFISH_MODE=stub GEMINI_API_KEY=local-stub-unused
+    set -a; . ~/.config/qualitrail/isolated-local.env; set +a   # separate persistent local SIGNOFF_PEPPER
+    # Next reads .env.local too; move it aside (or use a separate clone) so hosted values cannot leak in.
+    npm run build && npx next start -p 3100 &
+    E2E_STATE=$PWD/../e2e-import-state.json npx tsx scripts/e2e-import.mts
+    # restart the app with OPPORTUNITY_IMPORT_ENABLED=false, then:
+    E2E_STATE=$PWD/../e2e-import-state.json npx tsx scripts/e2e-import.mts flag-off
+    TEST_DATABASE_ADMIN_URL=postgres://postgres:postgres@127.0.0.1:54322/postgres npx vitest run tests/db
+    npx supabase stop
+
+### Pending approvals and exact next actions
+
+1. Done: "Your next steps" (552ef01), explanation layer and its safeguards. Keep PR #11 unmerged.
+2. Done: the user added `TINYFISH_API_KEY` to `.env.local`. Listing: https://jobs.lever.co/sila/46df3971-a656-49e9-bacc-8bc4dbaffae9
+3. **ONE consolidated approval (pending)** covers, in order, on project `ighnwgkqvajfkhmopttg` (shared by dev and
+   production; production code and Vercel settings stay unchanged):
+   a. backup (`supabase db dump`: roles, schema, data) to `~/qualitrail-backups/<ts>-pre-import-explanations/`;
+   b. dry run: `supabase migration list --remote` and `supabase db push --dry-run` must show exactly
+      `20261118100000` and `20261119100000` pending; both replayed on a disposable local Postgres restored from the
+      fresh schema dump, with `tests/db/job-import.test.ts` and `tests/db/explanations.test.ts`;
+   c. apply both migrations (`supabase db push`; never `config push`), verify tables, RLS, grants, function privileges;
+   d. bounded live import test, then e. bounded live explanation test, as "Inbox A Test (fictional)", from a local
+      app with flags on in the local shell only. Call caps (including retries and matching searches) are in the
+      approval request; stop and report on any cap, unexpected write, or more than 20 drafted lines.
+4. **Each needs separate approval:** Vercel variables with the flags off → merge PR #11 → deploy → enable each flag.
+
+A technician pastes a public job-listing link (or the listing text). QualiTrail retrieves that one page, drafts the
+requirement lines, lets the technician review them, then compares them with the technician's own saved records
+and shows a fit summary and report.
+
+## What leaves QualiTrail
+
+- **TinyFish Fetch** receives the listing URL only (`urls`, `format`, `per_url_timeout_ms`). Never the technician's
+  name, profile, evidence, documents or account. No forms, sign-ins or applications.
+- **Gemini (drafting)** receives the listing text only.
+- **Gemini (AI-assisted explanation, separate flag `AI_EXPLANATIONS_ENABLED`, off by default)** receives minimal,
+  redacted worker evidence. This is a NEW use of Gemini with worker data; see the next section. It must not be
+  switched on anywhere hosted without explicit approval.
+- Pasted text never goes to TinyFish.
+
+## AI-assisted explanation: data boundary
+
+A separate, clearly labelled layer, "Related evidence — AI-assisted explanation", for lines the checker marked
+"Can't assess automatically". The checked (deterministic) assessments are produced first and are never changed by it.
+
+When it runs: only when the technician presses "Explain related evidence" on a CURRENT match run. One generation per
+run (repeats return the saved one; at most 3 attempts per run; daily limit per technician; 30 requests/hour).
+
+What is sent to Gemini (one batched request per run, at most 3 model attempts, 90 s budget). This is the MINIMUM:
+- the employer's wording of each `cannot_assess` line that is NOT an eligibility condition, with opaque refs (Q1…);
+- for each such line, up to 5 related records of THIS technician, with opaque refs (E1…), and ONLY these fields:
+  `type`, `title`, `skills`, `workPerformed` (the record's activities), `equipment`, and a status label
+  ("self-reported", "document supplied by the technician", …). Lists are clipped (12/12/8 items, 120–200 chars).
+- a deterministic task check computed from the records' own wording (documented / assisted / done by others /
+  not done / summary only / not established).
+
+**Redacted, not anonymous.** Emails, phone numbers and street addresses are removed by pattern. Free text that the
+technician typed into a title, skill, activity or equipment entry (a customer's surname, a site or business name,
+a town) is sent as written. The offer shown before anything is sent says so.
+
+Never sent: summaries, original files or their text, issuers, dates, credential numbers, signatures, customer contact
+details, sign-off or supervisor comments, record or worker ids, versions, the technician's name or profile.
+Never sent at all: duration, driving/licence, physical, work authorisation, background check, education and schedule
+lines. They get a fixed "what would need clarifying" text and are never inferred from records.
+
+Supermemory: one search per `cannot_assess` line (eligibility lines included, to find task records shown as context
+only), using the employer's line text, inside the technician's own namespace (the search matching already uses).
+Hits are kept only if they are the technician's current, indexed records.
+
+### What the model may contribute, and how its output is checked
+
+Input text is treated as untrusted data; the prompt says to ignore instructions inside it. The model may only:
+(a) CHOOSE which supplied records relate, by ref, (b) list what is unclear, (c) suggest one next step. It does NOT
+restate the requirement: the employer's own wording is shown. It never describes a record: each cited record is shown
+with QUOTES of its own work performed/skills/equipment/title lines that relate to the line (`quoteRecord`, never the
+summary). A cited record with no such line is dropped; if none remain, the item is withheld (`inconsistent`).
+
+Relevance (`relevantExcerpts`) comes ONLY from the record's permitted fields sharing a recognised task of the line or
+a distinctive word with it. Memory similarity only orders candidates; it never makes a record related, and a title
+alone never links a record (regression: "ServiceTitan knowledge preferred" and "HVAC electrical systems" linked
+unrelated records by similarity). Task words used as modifiers ("installation team", "installation instructions",
+"installation-related issues") are not tasks, and task words never count as plain shared words.
+
+Charging: "verified/checked/measured refrigerant charge", "charge was verified" and "charge check" are
+`checked_only` ("the record mentions checking or verifying it, not performing it"), never documented charging.
+Assisted, observed, negated and by-others wording keep their own statuses.
+
+The WHOLE AI item for a line is withheld (the deterministic content is shown, with the reason) when:
+- it cites any record not supplied for that line (unknown or another line's): one bad reference discards the
+  line's AI text, not just the reference; the count of rejected references is shown;
+- it says nothing relates but cites records, or cites none while saying records relate;
+- any clause of its text (grounding.ts):
+  - contains a ref (E1/Q1);
+  - makes a positive statement about the technician or their records ("you have…", "your records show…") that
+    is not a hedge/negation or an instruction — positive facts come only from the task check and quotes;
+  - judges ability in either direction ("experienced", "lacks", "not qualified", "ability is evident"). The
+    employer's own wording (any 2+ word run of the line) is masked first, so "Ability to read wiring diagrams is
+    not stated" is allowed; the live test's false positives came from this;
+  - uses fulfilment language ("satisfies", "meets", "qualifies", "sufficient", "demonstrates", "confirms",
+    "matches", "covers", "fit", …) without a negation/hedge before it (or "ask … to …");
+  - mentions a task whose status in the supplied records is not "documented" without stating the limitation
+    (assisted / someone else / checked / not / summary / unclear) in the same clause.
+The task check's limitations are always listed first under "Not established or unclear", so the AI cannot drop them.
+AI "unclear" points that repeat a task the check already lists, repeat another point or repeat the next step are
+dropped. A next step shared by several lines is shown once under "Next step for several lines" (still labelled).
+
+Rejected AI text is never stored, logged or retained for debugging: only the reason code (`withheld`) is kept.
+Failures are reproduced with synthetic fixtures (`tests/explanations/live-regressions.test.ts`), not saved output.
+Retaining rejected text would need a separately approved retention design.
+These rules are deliberately strict; a false rejection only loses AI wording, never checked results.
+
+### Caching and currency
+
+One explanation per match run (unique row; `explanation_claim` returns `existing`/`busy`, so repeated or parallel
+requests never start a second generation; the button also ignores clicks while a request is in flight). A run is
+pinned to one evidence revision, and each cited record's version is stored. When read, the explanation is CURRENT
+only if its run is still current and every cited record is unchanged; otherwise every line is marked "Out of date"
+with a banner, it is kept for reference only, and the stale run cannot be explained again (run matching first).
+
+What it can never do: change any assessment, verification status, evidence link, "Evidence found" total, fit summary
+count or "Your next steps". It is stored in its own server-only table `match_run_explanations` (no browser access;
+writes only through `explanation_claim/save/fail`, service role only). If the model fails, the deterministic task
+check, eligibility and no-related texts are shown with a notice. AI-written parts are labelled; record links show
+on screen only, not in print.
+
+Retention: kept with the match run (deleted with it). Migration `20261119100000_match_run_explanations.sql` is
+additive; rollback while empty: `scripts/sql/rollback-explanations-if-empty.sql`.
+
+## Flow and states
+
+`opportunity_imports` (server-only table; no browser privileges):
+`fetching → fetched → drafting → drafted → confirmed`, or `failed` / `expired`.
+
+| Step | Guard |
+|---|---|
+| URL check | http(s) only, no credentials, ports 80/443, not localhost/internal names, and every A/AAAA record public (IPv4 and IPv6, including mapped/NAT64/6to4/Teredo). Refused before any row or provider call. |
+| Begin | Unique `(worker, url)` while fetching (duplicate submit → "already being retrieved"); daily limit on provider retrievals (`IMPORT_DAILY_LIMIT`); a fetch stuck > 3 min is marked failed. |
+| Fetch | Our own 45 s deadline (`AbortSignal.timeout`); per-URL timeout sent to TinyFish 3 s shorter. |
+| Final URL | The returned `final_url` must also pass the URL check, or the result is discarded. |
+| Lease | `opportunity_import_lease`: exactly one drafter; lapses after 2 min; never from `drafted`/`confirmed`, so a draft is never regenerated or overwritten. |
+| Draft | Gemini within the remaining budget (each attempt ≤ 15 s, none started without time to finish). Lines kept only if found word-for-word in the listing. |
+| Review | Optimistic version check on every save. |
+| Confirm | `opportunity_import_confirm`: locks the draft, checks owner/status/expiry/version, inserts the job and its requirements in one transaction, clears the stored listing text. A repeat returns the same job. Unique index on `opportunities.import_id`. |
+
+Overall request budget: 100 s, enforced in code. Vercel's default function limit is 300 s on every plan
+(vercel.com/docs/functions/limitations); `maxDuration = 120` is set only so the platform never cuts in first.
+TinyFish documents a 110 s per-URL backend timeout and a 120 s batch ceiling; we never wait that long.
+
+### Redirect / SSRF boundary
+
+QualiTrail's server never requests the listing URL itself. TinyFish documents that it rejects private IPs,
+localhost and cloud-metadata endpoints for submitted URLs (`invalid_url`) and for redirect targets
+(`invalid_redirect_url`). Our checks are an extra first line (before sending) and last line (discarding a result
+whose final URL is not public). Checking `final_url` can only reject a result; it cannot undo a redirect that already
+happened at the provider. DNS can change between our check and TinyFish's fetch; TinyFish's own checks cover that.
+
+## How lines are assessed
+
+Gemini only proposes verbatim lines. `lib/server/opportunities/requirement-rules.ts` builds rules
+deterministically from the employer's **original** wording:
+
+- Supported catalog: EPA 608 (unscoped, Universal, Type I/II/III; "Type II or Universal" is the one resolved
+  alternative because Universal covers Type II), NATE, OSHA 10/30, heat-pump installation / startup / commissioning
+  work (with "residential" required to be stated), commissioning, brazing.
+- Every content word must be covered by a catalog phrase or harmless filler. Leftover words, numbers, negation,
+  alternatives (`or`, `/`, `equivalent`), durations, driving, work authorization, physical, background check,
+  education and schedule wording → **Can't assess automatically** (`cannot_assess`).
+- Two phrases become an all-of rule only when joined by an explicit conjunction (`and`, a comma, `as well as`);
+  `with`/`in`/`for` never split a line. Each part is evaluated separately and the line takes the weakest result.
+- Scope terms must be stated in the record's **headline**: its title, skills and activities, with negated segments
+  ignored. Free-text summaries never satisfy a term, so "startup was done by another crew" cannot count as startup
+  work. A record missing a term is "needs review", never "evidence found". Install-only evidence never reaches
+  "evidence found" for an install-and-startup line, whatever its verification status or similarity (regression
+  tests in `tests/matching/evaluate-rules.test.ts`).
+- Seeded and sample requirements have no rule and evaluate exactly as before.
+
+`cannot_assess` is stored in `requirement_results` (constraint widened), accepted by `finalize_match_run`, and shown
+in labels, the constellation, counts, changes, the fit summary and the report, with the note that it says nothing
+about whether the person meets the requirement. It never adds "missing documentation".
+
+## Priority (read from the listing, never guessed)
+
+`priorityFor(line, heading)` in `lib/server/imports/structure-check.ts`:
+
+1. The line's own wording wins over its section ("NATE certification is a plus" under Requirements → preferred).
+2. A line or heading that says both required and preferred → **Priority not stated** (`unspecified`).
+3. "Not required" is never read as required.
+4. Section headings that state it: Requirements, Minimum/Required qualifications, What you'll need → required;
+   Preferred qualifications, Nice to have, Bonus points → preferred.
+5. Bare "Qualifications", "Skills", "What we're looking for", Responsibilities, no heading → unspecified.
+
+Plain-text listings (no Markdown) are supported: a line counts as a heading only if it is on a fixed list
+(`KNOWN_HEADING`), so short requirement lines like "NATE certification" are never mistaken for headings. Lines under
+Benefits/About-style sections are excluded. The technician can change priority on review; the listing's priority is
+kept next to it.
+
+## Your next steps (deterministic guidance)
+
+`lib/next-steps.ts` turns a SAVED requirement result into steps. No model call, no course search, no prediction,
+no schema change. It reads the assessment, the linked records and the gap messages; the evaluator writes those
+messages through the same module's templates (unchanged text), so older saved runs give the same guidance.
+
+| Stored reason | Step |
+|---|---|
+| `A record that directly documents: …` | Upload a document you already hold (My Evidence). Expired-only → "upload the current version". |
+| `"<title>" does not state <what>.` | Clarify the work details: edit that record (link opens it). |
+| Summary-only uncertainty | Clarify: add the work to the record's work performed. |
+| `A supporting document or independent confirmation for this record` | Upload a supporting document; when sign-off/review are on and the record is a work record or checklist, ask a supervisor or customer from the record's page. Nothing is sent until the person submits a request there. |
+| `cannot_assess` | Clarify manually: compare with your records or ask the employer; quotes the stored reason. |
+| Unrecognised stored text | Shown as written, not interpreted. |
+
+Documentation found → no step. The same step for several parts of one line is shown once, naming the parts. Every
+section carries: "A missing or incomplete record says nothing about your ability." Links appear on screen only;
+the printed report keeps the text.
+
+## Review edits
+
+- The employer's wording, excerpt and original priority never change.
+- "Your wording" is display-only, labelled wherever shown; rules ignore it.
+- Priority can be changed; the report shows the listing's priority next to it.
+- "Mark for manual review" forces `cannot_assess`. Removed lines are counted and disclosed on the job and report.
+- Completeness warnings (cut-off text, lines not found verbatim, model said incomplete, > 40 lines, no lines found,
+  pasted text, different final website) are stored, shown prominently, and must be acknowledged to confirm.
+
+## Configuration
+
+See `.env.example`: `OPPORTUNITY_IMPORT_ENABLED`, `TINYFISH_API_KEY` (server-only), `TINYFISH_MODE`,
+`IMPORT_DAILY_LIMIT`. `GEMINI_API_KEY` is also required. AI-assisted explanation: `AI_EXPLANATIONS_ENABLED`,
+`AI_EXPLANATIONS_MODE`, `AI_EXPLANATIONS_DAILY_LIMIT` (live mode also needs `SUPERMEMORY_API_KEY`). Problems answer 503 "not available" and are logged by name only.
+
+## Migration and rollback
+
+`supabase/migrations/20261118100000_job_import.sql` is additive. The app reads opportunities and requirements with
+`select *`, so it works before or after the migration. Rollback while unused:
+`scripts/sql/rollback-job-import-if-empty.sql` (refuses if any import, imported job, import field or `cannot_assess`
+result exists). `opportunity_import_expire()` clears expired drafts; no schedule is installed.
+
+## Checks
+
+- Unit: `tests/opportunities/requirement-rules.test.ts`, `tests/matching/evaluate-rules.test.ts`,
+  `tests/imports/*.test.ts` (URL/DNS, TinyFish client, verbatim check, orchestration), `tests/next-steps.test.ts`.
+- Database (disposable Postgres): `tests/db/job-import.test.ts` (concurrent lease and confirm, expiry, ownership,
+  browser-role denial, `cannot_assess` through `finalize_match_run`, rollback).
+- Browser (isolated local stack, stub): `scripts/e2e-import.mts` (URL and pasted plain-text journeys through to
+  the printable report), then `scripts/e2e-import.mts flag-off` after restarting with the flag off (saved jobs and
+  reports stay readable, a stale run stays unprintable, import routes answer 404). The local match runs there are
+  labelled fixtures because the isolated stack has no Supermemory.
+- AI-assisted explanation: `tests/explanations/*.test.ts` (task breakdown, planning, minimal/redacted input,
+  reference validation, orchestration), `tests/db/explanations.test.ts`, and `scripts/e2e-import.mts explain` with
+  `AI_EXPLANATIONS_ENABLED=true AI_EXPLANATIONS_MODE=stub` (job titles containing `stub:bad-ref` / `stub:fail`
+  exercise rejected references and model failure).
+- `npm run test:db` assumes Postgres on 5432; for the Supabase CLI stack set
+  `TEST_DATABASE_ADMIN_URL=postgres://postgres:postgres@127.0.0.1:54322/postgres` and run `npx vitest run tests/db`.
+
+## Limitations
+
+- Not tested against live TinyFish, live Gemini drafting or live Gemini/Supermemory explanations yet.
+- Explanations are only as good as the records' wording; the task vocabulary is explicit and small, and the local
+  stub search (word overlap) is not a model of real Supermemory relevance.
+- Listings behind sign-in, bot protection or in images/attachments need the paste fallback.
+- The catalog is deliberately small; most real postings will have several "Can't assess automatically" lines.
+- The stored listing is a snapshot; listing refresh/supersede (`supersedes_id`) is not implemented yet.
+- No scheduled purge of expired drafts.
