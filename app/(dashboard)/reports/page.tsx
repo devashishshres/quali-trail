@@ -260,7 +260,9 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
           <section className="break-inside-avoid">
             <h3 className="font-display text-xl font-semibold">Uncertainty</h3>
             <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate">
-              {run.results.flatMap((r) => r.uncertainties.map((u) => <li key={`${r.requirementId}${u}`}>{u}</li>))}
+              {[...new Set(run.results.flatMap((r) => r.uncertainties))].map((u) => (
+                <li key={u}>{u}</li>
+              ))}
             </ul>
           </section>
         </div>
