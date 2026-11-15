@@ -57,7 +57,7 @@ function Onboarding() {
   const err = (k: string) => fieldErrors[k] && <span className="mt-1 block text-xs text-danger">{fieldErrors[k].join(" ")}</span>;
 
   if (!m.emailConfirmed) return <Notice title="Confirm your email">Open the link we emailed you, then come back here.</Notice>;
-  if (!m.canOnboard) {
+  if (!m.canOnboard && !m.worker && !m.supervisor) {
     return (
       <Notice title="Not on the preview list yet" action={<button className="btn btn-secondary" onClick={async () => {
         await createBrowserSupabase().auth.signOut();
@@ -80,7 +80,7 @@ function Onboarding() {
       )}
       {error && <Notice tone="danger" title="Couldn't save your profile">{error}</Notice>}
 
-      {!m.worker && wanted !== "supervisor" && (
+      {!m.worker && m.canOnboardWorker && wanted !== "supervisor" && (
         <form onSubmit={(e) => submit("worker", e)} className="sheet space-y-4 p-5 sm:p-7">
           <h2 className="font-display text-2xl font-semibold">I&apos;m a technician</h2>
           <p className="text-sm text-slate">Keep your work records and certificates and build qualification packets. You start with an empty record; nothing is added for you.</p>
@@ -97,7 +97,7 @@ function Onboarding() {
         </form>
       )}
 
-      {!m.supervisor && wanted !== "worker" && (
+      {!m.supervisor && m.canOnboardSupervisor && wanted !== "worker" && (
         <form onSubmit={(e) => submit("supervisor", e)} className="sheet space-y-4 p-5 sm:p-7">
           <h2 className="font-display text-2xl font-semibold">I review technicians&apos; work</h2>
           <p className="text-sm text-slate">For supervisors, leads and others a technician invites. A reviewer profile on its own gives you access to no one&apos;s records; a technician has to invite you and you have to accept.</p>
@@ -109,6 +109,13 @@ function Onboarding() {
           <p className="text-xs text-slate">These details are shown with your reviews as you entered them. QualiTrail doesn&apos;t verify them.</p>
           <button className="btn btn-primary" disabled={busy !== null}>{busy === "supervisor" ? "Saving…" : "Create reviewer profile"}</button>
         </form>
+      )}
+
+      {!m.worker && !m.canOnboardWorker && m.supervisor && (
+        <p className="text-sm text-slate">Technician profiles are open only to addresses on the preview list. Your invitation lets you review a technician&apos;s work, not keep your own records here.</p>
+      )}
+      {!m.supervisor && !m.canOnboardSupervisor && m.worker && wanted === "supervisor" && (
+        <p className="text-sm text-slate">Supervisor review is switched off on this server, so a reviewer profile can&apos;t be added right now.</p>
       )}
 
       {(m.worker || m.supervisor) && !done && (

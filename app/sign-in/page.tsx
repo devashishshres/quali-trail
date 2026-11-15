@@ -80,8 +80,9 @@ export default function SignInPage() {
               <button className="btn btn-primary w-full" disabled={busy}>
                 {busy ? "Signing in…" : "Sign in"}
               </button>
-              <p className="text-sm text-slate">
-                New here? <SignUpLink />
+              <p className="flex justify-between gap-4 text-sm text-slate">
+                <span>New here? <SignUpLink /></span>
+                <Link href="/forgot-password" className="font-semibold underline">Forgot password?</Link>
               </p>
             </form>
           )}
@@ -93,6 +94,13 @@ export default function SignInPage() {
 
 function ConfirmNotice() {
   const notice = useSearchParams().get("notice");
+  if (notice === "expired") {
+    return (
+      <div className="mt-4">
+        <Notice title="That email link has expired or was already used">If you already confirmed your address, sign in below. Otherwise sign up again to get a new link.</Notice>
+      </div>
+    );
+  }
   if (notice !== "confirm") return null;
   return (
     <div className="mt-4">

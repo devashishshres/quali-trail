@@ -40,6 +40,9 @@ create table public.supervisor_relationships (
   invited_email_hash      text,
   email_hint              text,
   token_hash              text unique,
+  -- After an answer, the token hash moves here. It can only report "already answered" back to the SAME account;
+  -- it never accepts, grants access or reveals anything. Cleared when the relationship ends or is purged.
+  consumed_token_hash     text unique,
   status                  text not null default 'pending'
                             check (status in ('pending','accepted','declined','revoked','expired')),
   supervisor_auth_user_id uuid references auth.users (id) on delete restrict,
@@ -253,7 +256,12 @@ returns jsonb language plpgsql security definer set search_path = '' as $$
 declare r public.supervisor_relationships%rowtype; wname text;
 begin
   select * into r from public.supervisor_relationships where token_hash = p_token_hash for update;
-  if not found then return jsonb_build_object('ok', false, 'reason', 'invalid'); end if;
+  if not found then
+    -- An answered invitation reports only that it was answered: no name, no address hint.
+    select * into r from public.supervisor_relationships where consumed_token_hash = p_token_hash;
+    if found then return jsonb_build_object('ok', true, 'status', r.status, 'workerName', null, 'emailHint', null, 'answered', true); end if;
+    return jsonb_build_object('ok', false, 'reason', 'invalid');
+  end if;
   if r.status = 'pending' and r.expires_at <= now() then
     update public.supervisor_relationships set status = 'expired', closed_at = now() where id = r.id;
     r.status := 'expired';
@@ -268,15 +276,23 @@ create or replace function public.sup_invite_answer(p_token_hash text, p_auth uu
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare r public.supervisor_relationships%rowtype; u record; worker_auth uuid;
 begin
-  select * into r from public.supervisor_relationships where token_hash = p_token_hash for update;
+  select * into r from public.supervisor_relationships
+   where token_hash = p_token_hash or consumed_token_hash = p_token_hash for update;
   if not found then return jsonb_build_object('ok', false, 'reason', 'invalid'); end if;
   select id, lower(email) as email, email_confirmed_at into u from auth.users where id = p_auth;
   if not found or u.email_confirmed_at is null then return jsonb_build_object('ok', false, 'reason', 'email_unconfirmed'); end if;
   select auth_user_id into worker_auth from public.workers where id = r.worker_id;
   if worker_auth = p_auth then return jsonb_build_object('ok', false, 'reason', 'self'); end if;
 
-  if r.status = 'accepted' and r.supervisor_auth_user_id = p_auth and p_accept then
-    return jsonb_build_object('ok', true, 'repeated', true, 'relationshipId', r.id);
+  -- A retry by the account that already answered gets the same answer back; nothing changes.
+  if r.consumed_token_hash = p_token_hash then
+    if r.status = 'accepted' and r.supervisor_auth_user_id = p_auth and p_accept then
+      return jsonb_build_object('ok', true, 'status', 'accepted', 'repeated', true, 'relationshipId', r.id);
+    end if;
+    if r.status = 'declined' and not p_accept and r.invited_email = u.email then
+      return jsonb_build_object('ok', true, 'status', 'declined', 'repeated', true);
+    end if;
+    return jsonb_build_object('ok', false, 'reason', r.status);
   end if;
   if r.status <> 'pending' then return jsonb_build_object('ok', false, 'reason', r.status); end if;
   if r.expires_at <= now() then
@@ -288,7 +304,7 @@ begin
   end if;
 
   if not p_accept then
-    update public.supervisor_relationships set status = 'declined', closed_at = now(), token_hash = null where id = r.id;
+    update public.supervisor_relationships set status = 'declined', closed_at = now(), token_hash = null, consumed_token_hash = p_token_hash where id = r.id;
     insert into public.review_events (relationship_id, event) values (r.id, 'declined');
     return jsonb_build_object('ok', true, 'status', 'declined');
   end if;
@@ -302,7 +318,7 @@ begin
   -- Accepted: the address has done its job; keep only the masked hint.
   update public.supervisor_relationships
      set status = 'accepted', supervisor_auth_user_id = p_auth, accepted_at = now(),
-         invited_email = null, token_hash = null
+         invited_email = null, token_hash = null, consumed_token_hash = p_token_hash
    where id = r.id;
   insert into public.review_events (relationship_id, event) values (r.id, 'accepted');
   return jsonb_build_object('ok', true, 'status', 'accepted', 'relationshipId', r.id);
@@ -321,7 +337,7 @@ begin
     return jsonb_build_object('ok', false, 'reason', 'not_found');
   end if;
   if r.status not in ('pending','accepted') then return jsonb_build_object('ok', false, 'reason', r.status); end if;
-  update public.supervisor_relationships set status = 'revoked', closed_at = now(), token_hash = null where id = r.id;
+  update public.supervisor_relationships set status = 'revoked', closed_at = now(), token_hash = null, consumed_token_hash = null where id = r.id;
   with closed as (
     update public.review_requests set status = 'revoked', closed_at = now()
      where relationship_id = r.id and status = 'pending' returning id)
@@ -357,7 +373,9 @@ $$;
 -- Review requests
 -- ------------------------------------------------------------------
 
-create or replace function public.review_create(p_worker uuid, p_evidence uuid, p_relationship uuid, p_valid_days integer)
+-- p_share_original: the worker's explicit choice to let this supervisor open the original document. Without it the
+-- supervisor sees only the snapshot (and cannot choose "reviewed the supporting document").
+create or replace function public.review_create(p_worker uuid, p_evidence uuid, p_relationship uuid, p_valid_days integer, p_share_original boolean)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare e public.evidence%rowtype; w public.workers%rowtype; r public.supervisor_relationships%rowtype; snap jsonb; new_id uuid;
 begin
@@ -384,7 +402,7 @@ begin
     (worker_id, evidence_id, evidence_version, snapshot, snapshot_hash, file_hash, has_original,
      relationship_id, supervisor_auth_user_id, expires_at)
   values
-    (p_worker, e.id, e.version, snap, encode(sha256(convert_to(snap::text, 'utf8')), 'hex'), e.file_hash, e.storage_path is not null,
+    (p_worker, e.id, e.version, snap, encode(sha256(convert_to(snap::text, 'utf8')), 'hex'), e.file_hash, coalesce(p_share_original, false) and e.storage_path is not null,
      r.id, r.supervisor_auth_user_id, now() + make_interval(days => greatest(1, least(p_valid_days, 60))))
   returning id into new_id;
   insert into public.review_events (request_id, relationship_id, event) values (new_id, r.id, 'requested');
@@ -433,7 +451,7 @@ returns text language sql security definer set search_path = '' as $$
     join public.evidence e on e.id = q.evidence_id and e.worker_id = q.worker_id
    where q.id = p_request and q.supervisor_auth_user_id = p_auth
      and r.status = 'accepted' and r.supervisor_auth_user_id = p_auth
-     and q.status = 'pending' and q.expires_at > now()
+     and q.status = 'pending' and q.expires_at > now() and q.has_original
      and e.version = q.evidence_version and e.file_hash = q.file_hash;
 $$;
 
@@ -563,7 +581,7 @@ declare n integer;
 begin
   perform public.review_expire_due();
   update public.supervisor_relationships
-     set invited_email = null, invited_email_hash = null, email_hint = null, pii_purged_at = now()
+     set invited_email = null, invited_email_hash = null, email_hint = null, consumed_token_hash = null, pii_purged_at = now()
    where closed_at <= now() - make_interval(days => greatest(p_days, 1)) and pii_purged_at is null and status <> 'accepted';
   get diagnostics n = row_count;
   return n;

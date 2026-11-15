@@ -28,10 +28,18 @@ describe("email configuration", () => {
       expect(missingEmailConfig(env)).toContain(k);
     }
   });
-  it("the mock outbox never exists in production", () => {
-    expect(mockOutboxAllowed({ EMAIL_MODE: "mock", NODE_ENV: "development" } as unknown as NodeJS.ProcessEnv)).toBe(true);
-    expect(mockOutboxAllowed({ EMAIL_MODE: "mock", NODE_ENV: "production" } as unknown as NodeJS.ProcessEnv)).toBe(false);
-    expect(mockOutboxAllowed({ EMAIL_MODE: "resend", NODE_ENV: "development" } as unknown as NodeJS.ProcessEnv)).toBe(false);
+  it("simulated email and its outbox exist only on an isolated local setup, never hosted", () => {
+    const local = { EMAIL_MODE: "mock", SIGNOFF_PEPPER: "p".repeat(40), APP_BASE_URL: "http://localhost:3100", NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321" };
+    const e = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv;
+    expect(mockOutboxAllowed(e(local))).toBe(true);
+    expect(emailReady(e(local))).toBe(true);
+    const hostedCases: Record<string, string>[] = [{ VERCEL: "1" }, { VERCEL_ENV: "preview" }, { APP_BASE_URL: "https://app.example.test" }, { NEXT_PUBLIC_SUPABASE_URL: "https://abc.supabase.co" }];
+    for (const hosted of hostedCases) {
+      expect(mockOutboxAllowed(e({ ...local, ...hosted }))).toBe(false);
+      expect(emailReady(e({ ...local, ...hosted }))).toBe(false);
+      expect(missingEmailConfig(e({ ...local, ...hosted }))).toContain("EMAIL_MODE");
+    }
+    expect(mockOutboxAllowed(e({ ...local, EMAIL_MODE: "resend" }))).toBe(false);
   });
 });
 

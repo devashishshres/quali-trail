@@ -9,5 +9,5 @@ export async function POST(request: Request) {
   if (!th) return gone();
   const r = await rpc("sup_invite_peek", { p_token_hash: th });
   if (!r.ok) return gone();
-  return json({ status: r.status, workerName: r.workerName, emailHint: r.emailHint });
+  return json({ status: r.status, workerName: r.workerName ?? null, emailHint: r.emailHint ?? null, answered: r.answered === true });
 }

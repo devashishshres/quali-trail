@@ -10,6 +10,9 @@ export const SignupRequest = z.object({
 });
 export type SignupRequest = z.infer<typeof SignupRequest>;
 
+export const RecoverRequest = z.object({ email: z.string().trim().toLowerCase().max(320).pipe(z.email()) });
+export const ResetPasswordRequest = z.object({ password: z.string().min(10, "Use at least 10 characters.").max(200) });
+
 export const OnboardWorkerRequest = z.object({
   role: z.literal("worker"),
   name: z.string().trim().min(1).max(200),
@@ -34,6 +37,9 @@ export const MeResponse = z.object({
   supervisor: z.object({ name: z.string(), organization: z.string().nullable(), title: z.string().nullable() }).nullable(),
   /** May this account create a worker / supervisor profile now. */
   canOnboard: z.boolean(),
+  /** A technician profile is possible only under the sign-up policy (never by invitation alone). */
+  canOnboardWorker: z.boolean(),
+  canOnboardSupervisor: z.boolean(),
   features: z.object({ customerSignoff: z.boolean(), supervisorReview: z.boolean() }),
 });
 export type MeResponse = z.infer<typeof MeResponse>;
@@ -114,4 +120,5 @@ export const WorkerReview = z.object({
 });
 export type WorkerReview = z.infer<typeof WorkerReview>;
 
-export const CreateReviewRequest = z.object({ evidenceId: z.uuid(), relationshipId: z.uuid() });
+/** shareOriginal: the worker's explicit choice to let the supervisor open the original document (default: not shared). */
+export const CreateReviewRequest = z.object({ evidenceId: z.uuid(), relationshipId: z.uuid(), shareOriginal: z.boolean().default(false) });

@@ -6,7 +6,7 @@ import { toApiError } from "@/lib/client/errors";
 import { Notice } from "@/components/ui/states";
 
 const KEY = "qt-supervisor-invite";
-type Invite = { status: string; workerName: string; emailHint: string | null };
+type Invite = { status: string; workerName: string | null; emailHint: string | null; answered?: boolean };
 type View = "loading" | "invalid" | "closed" | "signed_out" | "ready" | "done";
 
 /**
@@ -53,9 +53,13 @@ export default function SupervisorInvitePage() {
     setBusy(true);
     setMessage(null);
     try {
-      await accountsApi.answerInvite(token.current!, accept);
+      const r = await accountsApi.answerInvite(token.current!, accept);
       try { sessionStorage.removeItem(KEY); } catch { /* ignore */ }
-      setMessage(accept ? "You're connected. Requests from this technician will appear in your reviews." : "Invitation declined.");
+      setMessage(
+        r.repeated
+          ? accept ? "You'd already accepted this invitation. Requests from this technician appear in your reviews." : "You'd already declined this invitation."
+          : accept ? "You're connected. Requests from this technician will appear in your reviews." : "Invitation declined.",
+      );
       setView("done");
     } catch (e) {
       const err = toApiError(e) as { message: string } & { reason?: string };
@@ -73,7 +77,8 @@ export default function SupervisorInvitePage() {
       <div className="sheet mt-6 space-y-4 p-5 sm:p-7">
         {view === "loading" && <p className="text-slate">Loading…</p>}
         {view === "invalid" && <><h1 className="font-display text-2xl font-semibold">This invitation link isn&apos;t valid</h1><p className="text-slate">It may have expired or been replaced by a newer email. Ask the technician to send it again.</p></>}
-        {view === "closed" && <><h1 className="font-display text-2xl font-semibold">This invitation is closed</h1><p className="text-slate">Status: {invite?.status}. Ask the technician for a new invitation if you need one.</p></>}
+        {view === "closed" && invite?.answered && invite.status === "accepted" && <><h1 className="font-display text-2xl font-semibold">This invitation was already accepted</h1><p className="text-slate">If you accepted it, sign in with the invited address to see the technician&apos;s requests. The link can&apos;t be used by anyone else.</p><Link className="btn btn-primary" href="/supervisor">Go to your reviews</Link></>}
+        {view === "closed" && !(invite?.answered && invite.status === "accepted") && <><h1 className="font-display text-2xl font-semibold">This invitation is closed</h1><p className="text-slate">Status: {invite?.status}. Ask the technician for a new invitation if you need one.</p></>}
         {invite && (view === "signed_out" || view === "ready") && (
           <>
             <h1 className="font-display text-2xl font-semibold">{invite.workerName} invited you to review their completed jobs</h1>

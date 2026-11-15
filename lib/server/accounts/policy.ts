@@ -23,13 +23,37 @@ export function onAllowlist(email: string, env: NodeJS.ProcessEnv = process.env)
     .some((entry) => (entry.startsWith("@") ? entry === domain : entry === e));
 }
 
-/** Policy decision without the invitation lookup (the caller supplies `hasInvite`). */
-export function mayRegister(email: string, hasInvite: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
+/** Eligible under SIGNUP_MODE alone. This is the ONLY way to a technician profile. */
+export function eligibleBySignupPolicy(email: string, env: NodeJS.ProcessEnv = process.env): boolean {
   const mode = signupMode(env);
-  if (hasInvite) return true;
   if (mode === "open") return true;
   if (mode === "allowlist") return onAllowlist(email, env);
   return false;
+}
+
+/**
+ * May this address create an Auth account through the app? Either it is eligible under the policy, or it holds an
+ * open supervisor invitation (which only ever leads to a reviewer profile; see `mayCreateRole`).
+ */
+export function mayRegister(email: string, hasInvite: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
+  return hasInvite || eligibleBySignupPolicy(email, env);
+}
+
+export type RoleState = { email: string; hasWorker: boolean; hasSupervisor: boolean; hasInvite: boolean; supervisorReviewOn: boolean };
+
+/**
+ * May this account create the given profile now? Enforced by POST /api/onboarding for first-time setup AND for
+ * later role additions.
+ *  - worker:     only by the sign-up policy. An invitation, or an existing reviewer profile, never qualifies.
+ *  - supervisor: only while supervisor review is on, and only with an open invitation, the sign-up policy,
+ *                or an existing technician profile (a technician adding the reviewer role).
+ * An existing profile of the requested role is always fine (idempotent).
+ */
+export function mayCreateRole(role: "worker" | "supervisor", s: RoleState, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (role === "worker") return s.hasWorker || eligibleBySignupPolicy(s.email, env);
+  if (s.hasSupervisor) return true;
+  if (!s.supervisorReviewOn) return false;
+  return s.hasInvite || s.hasWorker || eligibleBySignupPolicy(s.email, env);
 }
 
 /** Only same-site relative paths, never `//host`, `/\host`, schemes or control characters. */

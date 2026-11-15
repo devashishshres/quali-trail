@@ -39,7 +39,7 @@ export async function POST(request: Request) {
   const body = CreateReviewRequest.safeParse(await request.json().catch(() => null));
   if (!body.success) return apiError("validation_failed", "Choose a record and a supervisor.", fieldErrors(body.error));
   if (!(await allow("review-create-worker", ctx.worker.id, 3600, 30))) return apiError("rate_limited", "Too many requests this hour.");
-  const r = await rpc("review_create", { p_worker: ctx.worker.id, p_evidence: body.data.evidenceId, p_relationship: body.data.relationshipId, p_valid_days: 30 });
+  const r = await rpc("review_create", { p_worker: ctx.worker.id, p_evidence: body.data.evidenceId, p_relationship: body.data.relationshipId, p_valid_days: 30, p_share_original: body.data.shareOriginal });
   if (!r.ok) return apiError(r.reason === "not_found" ? "not_found" : "validation_failed", REASON[String(r.reason)] ?? "Couldn't create the request.");
   const sent = await notifyReviewRequested({ requestId: String(r.id), supervisorAuthUserId: String(r.supervisorAuthUserId), workerName: String(r.workerName), workerId: ctx.worker.id, attempt: 0 });
   // The request exists either way (it is in the supervisor's dashboard); a failed email is reported, not hidden.

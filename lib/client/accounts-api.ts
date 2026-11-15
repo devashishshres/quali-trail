@@ -18,7 +18,7 @@ export const accountsApi = {
   revokeRelationship: (id: string) => call<{ revoked: boolean }>(`/api/supervisors/${id}/revoke`, post()),
   remindInvite: (id: string) => call<{ reminded: boolean }>(`/api/supervisors/${id}/remind`, post()),
   reviews: (evidenceId: string) => call<{ reviews: WorkerReview[] }>(`/api/reviews?evidenceId=${encodeURIComponent(evidenceId)}`),
-  requestReview: (evidenceId: string, relationshipId: string) => call<{ id: string; notified: boolean; notice: string | null }>("/api/reviews", post({ evidenceId, relationshipId })),
+  requestReview: (evidenceId: string, relationshipId: string, shareOriginal: boolean) => call<{ id: string; notified: boolean; notice: string | null }>("/api/reviews", post({ evidenceId, relationshipId, shareOriginal })),
   revokeReview: (id: string) => call<{ revoked: boolean }>(`/api/reviews/${id}/revoke`, post()),
   remindReview: (id: string) => call<{ reminded: boolean }>(`/api/reviews/${id}/remind`, post()),
 
@@ -27,6 +27,6 @@ export const accountsApi = {
   review: (id: string) => call<{ review: SupervisorReview; statements: { observed: string; documents: string } }>(`/api/supervisor/reviews/${id}`),
   reviewDocument: (id: string) => call<{ url: string }>(`/api/supervisor/reviews/${id}/document`),
   respond: (id: string, body: ReviewRespondRequest) => call<{ recorded: boolean; repeated: boolean; status: string }>(`/api/supervisor/reviews/${id}/respond`, post(body)),
-  peekInvite: (t: string) => call<{ status: string; workerName: string; emailHint: string | null }>("/api/supervisor/invite/peek", post(), t),
+  peekInvite: (t: string) => call<{ status: string; workerName: string | null; emailHint: string | null; answered?: boolean }>("/api/supervisor/invite/peek", post(), t),
   answerInvite: (t: string, accept: boolean) => call<{ status: string; repeated: boolean }>("/api/supervisor/invite/answer", post({ accept }), t),
 };
