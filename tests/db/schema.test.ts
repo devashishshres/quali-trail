@@ -41,6 +41,22 @@ async function asUser<T>(authUserId: string | null, fn: () => Promise<T>): Promi
   }
 }
 
+
+/**
+ * Run `fn` as the trusted server (service_role), inside a transaction rolled back after.
+ * Evidence system columns and match tables are server-written only: signed-in
+ * clients are deliberately denied (see migration 20261114180000).
+ */
+async function asServer<T>(fn: () => Promise<T>): Promise<T> {
+  await db.query("begin");
+  try {
+    await db.query("set local role service_role");
+    return await fn();
+  } finally {
+    await db.query("rollback");
+  }
+}
+
 /** Expect a query to fail with a specific Postgres error code. */
 async function expectPgError(promise: Promise<unknown>, code: string) {
   await expect(promise).rejects.toMatchObject({ code });
@@ -133,7 +149,7 @@ describe.skipIf(!ADMIN_URL)("database schema", () => {
   });
 
   it("duplicate content for the same worker is rejected", async () => {
-    await asUser(ALEX_AUTH, () =>
+    await asServer(() =>
       expectPgError(
         db.query(
           "insert into public.evidence (worker_id, type, title, source_kind, file_hash) values ($1,'other','dup','manual_text',$2)",
@@ -146,13 +162,13 @@ describe.skipIf(!ADMIN_URL)("database schema", () => {
 
   it("independently_confirmed cannot be set without a human verification event", async () => {
     const id = DEMO_EVIDENCE[2].id; // EPA 608
-    await asUser(ALEX_AUTH, () =>
+    await asServer(() =>
       expectPgError(
         db.query("update public.evidence set verification_status = 'independently_confirmed' where id = $1", [id]),
         "23514",
       ),
     );
-    await asUser(ALEX_AUTH, () =>
+    await asServer(() =>
       expectPgError(
         db.query(
           `insert into public.evidence (worker_id, type, title, source_kind, file_hash, verification_status)
@@ -195,7 +211,7 @@ describe.skipIf(!ADMIN_URL)("database schema", () => {
   });
 
   it("editing evidence bumps version, resets indexing and marks completed match runs stale", async () => {
-    await asUser(ALEX_AUTH, async () => {
+    await asServer(async () => {
       const id = DEMO_EVIDENCE[0].id;
       await db.query("update public.evidence set index_status = 'indexed' where id = $1", [id]);
 
@@ -221,7 +237,7 @@ describe.skipIf(!ADMIN_URL)("database schema", () => {
   });
 
   it("changing only index status does not bump the evidence version", async () => {
-    await asUser(ALEX_AUTH, async () => {
+    await asServer(async () => {
       const { rows } = await db.query(
         "update public.evidence set index_status = 'processing' where id = $1 returning version",
         [DEMO_EVIDENCE[1].id],
@@ -231,7 +247,7 @@ describe.skipIf(!ADMIN_URL)("database schema", () => {
   });
 
   it("adding new evidence marks completed runs stale", async () => {
-    await asUser(ALEX_AUTH, async () => {
+    await asServer(async () => {
       const run = await db.query(
         "insert into public.match_runs (worker_id, opportunity_id, evidence_revision, status) values ($1,$2,0,'completed') returning id",
         [DEMO_WORKER.id, OPPORTUNITY],

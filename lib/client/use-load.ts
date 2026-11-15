@@ -18,7 +18,7 @@ export function useLoad<T>(load: () => Promise<T>, key: string = "") {
 
   useEffect(() => {
     let live = true;
-    load().then(
+    Promise.resolve().then(load).then(
       (data) => live && setState({ status: "ready", data }),
       (e) => live && setState((prev) => ({ status: "error", data: prev.data, error: toApiError(e) })),
     );
@@ -30,6 +30,15 @@ export function useLoad<T>(load: () => Promise<T>, key: string = "") {
   }, [key, nonce]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === "visible") reload(); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [reload]);
   const setData = useCallback((data: T) => setState({ status: "ready", data }), []);
   return { ...state, reload, setData };
 }

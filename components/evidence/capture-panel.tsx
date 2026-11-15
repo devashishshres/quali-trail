@@ -23,6 +23,7 @@ export function CapturePanel({ onSaved }: { onSaved: (e: Evidence) => void }) {
   function pickFile(f: File | null) {
     setError(null);
     setSaved(null);
+    setFile(null);
     if (f && !(UPLOAD_LIMITS.acceptedMimeTypes as readonly string[]).includes(f.type)) {
       return setError("Only PDF files can be uploaded right now.");
     }
@@ -33,6 +34,7 @@ export function CapturePanel({ onSaved }: { onSaved: (e: Evidence) => void }) {
   }
 
   async function extract() {
+    if (busy || (mode === "pdf" ? !file : text.trim().length < MIN_TEXT)) return;
     setBusy(true);
     setError(null);
     setSaved(null);
@@ -87,6 +89,7 @@ export function CapturePanel({ onSaved }: { onSaved: (e: Evidence) => void }) {
               role="tab"
               aria-selected={mode === m}
               onClick={() => setMode(m)}
+              disabled={busy}
               className={`rounded px-3 py-1.5 text-sm font-semibold ${mode === m ? "bg-white text-navy shadow-sm" : "text-slate"}`}
             >
               {label}
@@ -148,7 +151,7 @@ export function CapturePanel({ onSaved }: { onSaved: (e: Evidence) => void }) {
       )}
       {saved && (
         <div className="mt-4">
-          <Notice title={`Saved "${saved.title}"`}>It&apos;s being indexed in memory now. The status updates below.</Notice>
+          <Notice title={`Saved "${saved.title}"`}>{saved.indexStatus === "failed" ? "Your record is saved, but indexing failed. Use Retry indexing below." : saved.indexStatus === "indexed" ? "Your record is saved and searchable in memory." : "Your record is saved. Memory indexing status updates below."}</Notice>
         </div>
       )}
 
@@ -156,7 +159,7 @@ export function CapturePanel({ onSaved }: { onSaved: (e: Evidence) => void }) {
         <button className="btn btn-primary" onClick={extract} disabled={!ready || busy}>
           {busy ? "Reading with Gemini…" : "Extract details"}
         </button>
-        {busy && <span className="text-sm text-slate" role="status">This usually takes a few seconds.</span>}
+        {busy && <span className="text-sm text-slate" role="status">Reading your record. If the service is busy, you can review the details manually.</span>}
       </div>
     </div>
   );

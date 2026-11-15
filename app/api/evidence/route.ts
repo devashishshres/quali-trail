@@ -1,5 +1,7 @@
 import { getAuthedContext } from "@/lib/api/auth";
 import { apiError, ok } from "@/lib/api/responses";
+import { reconcileIndexing } from "@/lib/server/memory/indexing";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { EVIDENCE_COLUMNS, toEvidence, toWorker, type EvidenceRow } from "@/lib/supabase/mappers";
 import type { ListEvidenceResponse } from "@/lib/types";
 
@@ -26,9 +28,17 @@ export async function GET() {
     return apiError("internal", "Could not load evidence. Please try again.");
   }
 
+  // Check actual indexing progress (bounded, best-effort) before answering.
+  let rows = data;
+  try {
+    rows = await reconcileIndexing(createAdminClient(), ctx.supabase, ctx.worker.id, data);
+  } catch (e) {
+    console.error("index reconcile skipped", { message: e instanceof Error ? e.message : "unknown" });
+  }
+
   const body: ListEvidenceResponse = {
     worker: toWorker(ctx.worker),
-    evidence: data.map(toEvidence),
+    evidence: rows.map(toEvidence),
   };
   return ok(body);
 }

@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { Fragment, useState } from "react";
+import { flushSync } from "react-dom";
 import { REPORT_DISCLAIMER, type EvidenceAssessment, type EvidenceConnection, type Opportunity, type Worker } from "@/lib/types";
 import { api } from "@/lib/client/api";
 import { useLoad } from "@/lib/client/use-load";
@@ -42,6 +43,33 @@ export default function ReportsPage() {
 
 function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportunity }) {
   const latest = useLoad(() => api.latestMatch(opportunity.id), opportunity.id);
+  const [checking, setChecking] = useState(false);
+  const [checkedAt, setCheckedAt] = useState<string | null>(null);
+  const [printError, setPrintError] = useState<string | null>(null);
+
+  /**
+   * Re-read the newest saved run immediately before printing, so a report is
+   * never printed from a screen that went stale after it loaded. The printed
+   * page also carries its own status banner (below), because browser-menu
+   * printing cannot be intercepted.
+   */
+  async function printFresh() {
+    setChecking(true);
+    setPrintError(null);
+    try {
+      const fresh = await api.latestMatch(opportunity.id);
+      flushSync(() => {
+        latest.setData(fresh);
+        setCheckedAt(new Date().toISOString());
+      });
+      if (fresh?.matchRun.status === "completed") window.print();
+      else setPrintError("Your results changed since this page loaded. Run matching again before printing.");
+    } catch {
+      setPrintError("Couldn't confirm the results are current, so printing was stopped. Try again.");
+    } finally {
+      setChecking(false);
+    }
+  }
 
   if (latest.status === "loading") return <Loading label="Loading the latest match run…" />;
   if (latest.error) return <ErrorNotice error={latest.error} onRetry={latest.reload} />;
@@ -70,14 +98,24 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
           </Notice>
         )}
         {run.status === "failed" && <Notice tone="danger" title="The last match run failed">Run matching again before printing.</Notice>}
+        {printError && <Notice tone="warning" title="Not printed">{printError}</Notice>}
         <div className="flex justify-end">
-          <button className="btn btn-primary" onClick={() => window.print()} disabled={!current}>
-            <Icon name="printer" className="size-4" /> Print or save as PDF
+          <button className="btn btn-primary" onClick={printFresh} disabled={!current || checking}>
+            <Icon name="printer" className="size-4" /> {checking ? "Checking results are current…" : "Print or save as PDF"}
           </button>
         </div>
       </div>
 
       <article className="sheet print-plain p-6 sm:p-10">
+        {run.status !== "completed" && (
+          <div role="alert" className="mb-5 border-2 border-danger px-4 py-3 text-sm font-semibold print:border-black">
+            {run.status === "stale"
+              ? "OUT OF DATE: this report was built from an earlier set of records. Records have changed since, so it may not reflect what is on file now. Run matching again for a current report."
+              : run.status === "failed"
+                ? "INCOMPLETE: the last matching run failed. These results are not a current report."
+                : "IN PROGRESS: this matching run has not finished. These results are not a current report."}
+          </div>
+        )}
         <header className="flex flex-wrap items-start justify-between gap-4 border-b-2 border-navy pb-5">
           <div>
             <p className="font-display text-lg font-bold">
@@ -90,6 +128,14 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
             <dd className="font-semibold">{formatStamp(run.createdAt)}</dd>
             <dt className="mt-1 text-slate">Run reference</dt>
             <dd className="font-medium">{run.id.slice(0, 8)}</dd>
+            <dt className="mt-1 text-slate">Status</dt>
+            <dd className="font-medium">{run.status === "completed" ? "Current when generated" : run.status === "stale" ? "Out of date" : run.status}</dd>
+            {checkedAt && (
+              <>
+                <dt className="mt-1 text-slate">Freshness checked</dt>
+                <dd className="font-medium">{formatStamp(checkedAt)}</dd>
+              </>
+            )}
           </dl>
         </header>
 

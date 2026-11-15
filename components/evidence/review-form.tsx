@@ -104,6 +104,17 @@ export function ReviewForm({
     "aria-invalid": err(name) ? true : undefined,
   });
 
+  if (draft.duplicateOfEvidenceId) {
+    return (
+      <div className="space-y-4">
+        <Notice tone="warning" title="This record is already saved">
+          <a className="font-semibold underline" href={`#evidence-${draft.duplicateOfEvidenceId}`}>Show the saved record</a>. No second copy was created.
+        </Notice>
+        <button type="button" className="btn btn-secondary" onClick={onDiscard}>Add a different record</button>
+      </div>
+    );
+  }
+
   return (
     <form onSubmit={onSubmit} className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -118,7 +129,7 @@ export function ReviewForm({
 
       {draft.extractionError && (
         <Notice tone="warning" title="Gemini couldn't read this">
-          {draft.extractionError} Fill in the details yourself. Your document is kept with the record.
+          {draft.extractionError} {draft.sourceKind === "pdf_upload" ? "Your original PDF will be kept with the saved record." : "Your description is preserved in the summary below; check and complete the fields."}
         </Notice>
       )}
       {draft.duplicateOfEvidenceId && (
