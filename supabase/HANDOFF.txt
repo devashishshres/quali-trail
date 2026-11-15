@@ -187,3 +187,10 @@ Customer sign-off Phase 1 (branch feature/customer-signoff, PR open, not merged)
 - New server code is behind SIGNOFF_ENABLED (default off) and SIGNOFF_MAIL_MODE (default off). No real email has been sent; no DNS, authentication, deployment or live seeding was done. Sam Okafor's reserved baseline, Alex and Jordan were not touched.
 - To try it locally you need the migration applied to a database the app points at; that needs separate approval for the live project.
 - Required before real customer use: Resend bounce/complaint webhook, a verified sending domain, and the retention schedule (pg_cron proposal in README, not enabled).
+
+Release: accounts, completed jobs, customer sign-off, supervisor review (draft PRs, stacked, none merged)
+- Branches: feature/customer-signoff (PR #6, fixed) -> feature/email-delivery -> feature/accounts-supervisors -> feature/jobs-and-integration.
+- Three migrations (20261116100000, 20261117090000, 20261117100000) are NOT applied to the development project or any hosted project. Read the recorded migration history first.
+- Verified only on disposable infrastructure: docker Postgres (database tests) and an isolated local Supabase stack (integration tests and scripts/e2e-local.mjs browser journeys). Gemini and Supermemory were not used locally.
+- No real email, no hosted accounts, no DNS, Auth or hosting changes. Alex, Jordan and Sam untouched; Sam stays at 2 of 4.
+- Next steps needing approval: see docs/release-accounts-signoff-review.md, "Proposed external setup" and "Hosted acceptance checklist".

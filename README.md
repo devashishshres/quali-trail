@@ -26,9 +26,9 @@ Next.js 16 (App Router), React 19, Supabase (Postgres, Auth, private Storage), S
 
 ## Pages and API
 
-Pages: `/passport`, `/evidence`, `/opportunities`, `/reports`, `/sign-in`.
+Pages: `/passport`, `/evidence`, `/opportunities`, `/reports`, `/supervisors` (technician), `/supervisor` and `/supervisor/reviews/[id]` (reviewer), `/sign-in`, `/sign-up`, `/onboarding`; public: `/signoff`, `/signoff/privacy`, `/invite/supervisor`.
 
-API (all require a signed-in user): `GET /api/evidence`, `GET /api/evidence/[id]` (60-second signed link to the original), `POST /api/evidence/extract`, `POST /api/evidence/confirm`, `POST /api/evidence/[id]/reindex`, `GET /api/opportunities`, `POST /api/matches/run`, `GET /api/matches/latest`, `GET /api/matches/[id]`.
+API (all require a signed-in user): `GET /api/evidence`, `GET /api/evidence/[id]` (60-second signed link to the original), `POST /api/evidence/extract`, `POST /api/evidence/confirm`, `POST /api/evidence/[id]/reindex`, `GET /api/opportunities`, `POST /api/matches/run`, `GET /api/matches/latest`, `GET /api/matches/[id]`, `PATCH /api/evidence/[id]`, `POST /api/jobs`, `GET /api/attestations`, `GET /api/me`, `POST /api/onboarding`, the sign-off, supervisor and review routes listed in [the release notes](docs/release-accounts-signoff-review.md). Public: `POST /api/auth/signup`, `GET /auth/confirm`, the customer `/api/signoff/*` routes (token header), `POST /api/webhooks/resend` (signature-verified).
 
 ## Setup
 
@@ -50,7 +50,7 @@ By default extraction tries `gemini-3.5-flash-lite`, then `gemini-3.5-flash`, th
 
 ### Database
 
-Six SQL files in `supabase/migrations/`, applied in filename order:
+Eight SQL files in `supabase/migrations/`, applied in filename order:
 
 | File | Purpose |
 |---|---|
@@ -59,7 +59,9 @@ Six SQL files in `supabase/migrations/`, applied in filename order:
 | `20261114180000_match_run_functions.sql` | Atomic match-run start/finalize/fail (service role only), privilege hardening |
 | `20261114210000_evidence_integrity.sql` | Draft protections, provenance-aware versioning, staleness on leaving indexed |
 | `20261115120000_worker_summary.sql` | Optional `workers.summary` (additive, nullable) |
-| `20261116100000_customer_signoff.sql` | Customer sign-off tables and service-role functions (additive; see below). **Not applied to any shared project yet.** |
+| `20261116100000_customer_signoff.sql` | Customer sign-off tables and service-role functions. **Not applied to any shared project yet.** |
+| `20261117090000_email_delivery.sql` | Email delivery records and webhook de-duplication (no addresses or bodies). **Not applied yet.** |
+| `20261117100000_accounts_supervisor_review.sql` | Employment arrangement, supervisor profiles, relationships and reviews. **Not applied yet.** |
 
 The summary migration is optional for the app to run: if the column is absent the summary simply does not show, and sign-in and matching are unaffected. Apply it before seeding a synthetic worker, which writes a summary.
 
@@ -128,29 +130,32 @@ TEST_DATABASE_ADMIN_URL=postgres://postgres:postgres@127.0.0.1:55432/postgres np
 docker rm -f qualitrail-test-pg
 ```
 
-Without `TEST_DATABASE_ADMIN_URL` the database tests are skipped, not failed.
+Without `TEST_DATABASE_ADMIN_URL` the database tests are skipped, not failed. Integration tests that need Supabase APIs run only against the local stack (`TEST_SUPABASE_URL`, `TEST_SUPABASE_PUBLISHABLE_KEY`, `TEST_SUPABASE_SECRET_KEY` from `npx supabase status`; they refuse non-local URLs) and are otherwise skipped.
 
-## Customer sign-off (Phase 1, behind a flag)
+## Accounts, completed jobs, customer sign-off and supervisor review
 
-A technician can ask a customer to acknowledge **one saved work record or checklist**. Scope in this phase: work records and checklists only; customer role only (no supervisor); records that are *self-reported* or *document supplied* (anything pending review, independently confirmed, or expired is refused).
+All of it is off by default and behind flags; full design, authorization model, retention table, external setup and the hosted acceptance checklist are in [docs/release-accounts-signoff-review.md](docs/release-accounts-signoff-review.md). In short:
 
-**What an acknowledgment means.** The customer received a code at the address *the worker provided*, entered it, and acknowledged a snapshot of the record. It does **not** verify the customer's identity or the work, and it never changes a record's verification label. The label reads: *"Customer acknowledged on <date>. A code sent to the email address the worker provided was entered. Neither the customer's identity nor the work is independently verified."* A link alone never produces an acknowledgment. Simulated delivery is always labelled *"Simulated (no real email was sent)"* and is never described as verification.
+- **Accounts.** `SIGNUP_MODE` is `closed` (default: only invited supervisors can register), `allowlist` or `open`; email confirmation is required and the policy is enforced again at onboarding. One account can be a technician, a reviewer, or both. A role grants no access to anyone else's records.
+- **Completed jobs** are ordinary work records (self-reported, or document supplied with a PDF), indexed and matched like any other.
+- **Customer sign-off**: a link opens only a gate; details need a single-use code sent to the address the technician provided. Label: *"Customer acknowledged on <date>. A code sent to the email address the worker provided was entered. Neither the customer's identity nor the work is independently verified."* Simulated email is always labelled simulated.
+- **Supervisor review**: accepted only by a confirmed account with the invited email, never the technician's own. Labels say exactly what was said: *"Supervisor confirmed observing these tasks: …"* or *"Supervisor reviewed supporting documentation"* (and that it did not observe the work or confirm authenticity). Not certification.
+- None of this changes `verification_status` or a qualification assessment. Edits supersede open requests; completed ones show "Changed since…". Packets never show a customer address or typed signature.
+- **Retention.** The 90-day purge removes customer contact data and comments, codes and sessions. It **keeps the typed signature** (personal information, kept because it is the acknowledgment) with the decision and snapshot. Scheduling via pg_cron is proposed, not enabled.
 
-**Flow.** The invitation link is `APP_BASE_URL/signoff#t=<token>`. The token is in the URL fragment, so it is not sent to servers, logs or referrers; the page removes it from the address bar and sends it in a header. The link opens a minimal gate page (the worker's name and a masked address). Details appear only after the customer enters a single-use 6-digit code. Reissuing a code invalidates earlier ones; 5 tries per code, 3 codes per 24 hours, and the request locks after 10 failures. A correct code creates a 30-minute HttpOnly session bound to that one invitation. A decision is recorded in one database transaction that re-checks session, expiry, invitation status and the record's version; concurrent or repeated submissions produce at most one response.
+### Local browser journeys (isolated local Supabase)
 
-**Editing.** `PATCH /api/evidence/:id` edits title, date, issuer and details of a work record or checklist. It cannot change the type or the verification status, and refuses independently confirmed, pending-review and expired records. An edit bumps the version, marks the record for re-indexing, makes saved reports stale, and changes open customer requests for the old version to *superseded*. PDF-backed records edited after upload show "Edited after upload".
+```bash
+npx supabase start                        # Docker; local Postgres, Auth, Storage, Mailpit. Applies all migrations.
+# Build and start the app on :3100 with LOCAL values only (no provider keys), e.g. from a separate worktree with no .env.local:
+#   NEXT_PUBLIC_DATA_MODE=live NEXT_PUBLIC_SUPABASE_URL/..._PUBLISHABLE_KEY/SUPABASE_SECRET_KEY from `npx supabase status`
+#   SIGNOFF_ENABLED=true SUPERVISOR_REVIEW_ENABLED=true EMAIL_MODE=mock APP_BASE_URL=http://localhost:3100
+#   SIGNOFF_PEPPER=<random 40+ chars> SIGNUP_MODE=allowlist SIGNUP_ALLOWLIST=@test.qualitrail.dev
+E2E_APP_DIR=<app dir> E2E_SERVER_LOG=<server log> node scripts/e2e-local.mjs   # refuses non-local Supabase URLs
+npx supabase stop
+```
 
-**What is stored, and the 90-day purge.** `signoff_purge_pii(90)` removes, 90 days after a request closes: the customer email, name, the address hash and masked hint, free-text comments, and all codes, sessions and rate-limit rows. It **keeps** the typed signature, decision, timestamp, snapshot and its fingerprint, record version, file hash and event names, because the typed signature *is* the acknowledgment and is itself personal information; it is not deleted by the purge. Hashed addresses in the suppression list (opt-outs, bounces, complaints) are kept so those addresses are not contacted again. Invitations hold only the worker's name, a link and an opt-out/privacy notice. Tokens, codes and full addresses are kept out of logs (a redacting logger and tests that capture logs), and the customer pages and API send `no-store`, `noindex` and `no-referrer`.
-
-**Retention scheduling (proposal, not enabled).** If `pg_cron` is available in the project (Dashboard, Database, Extensions), a daily job could call `select public.signoff_purge_pii(90);`. Do not enable or configure it without separate approval. Until then the function can be run manually.
-
-**Email delivery.** `SIGNOFF_MAIL_MODE`: `off` (default; nothing sent), `mock` (simulated local outbox, banners everywhere, available only outside production), `resend` (real email). Resend mode refuses to send unless `RESEND_API_KEY`, `RESEND_FROM`, `RESEND_WEBHOOK_SECRET` and `APP_BASE_URL` are set. **Bounce/complaint handling is required before real customer use:** point a Resend webhook at `POST /api/webhooks/resend` (signature-verified); bounced or complained addresses go on the suppression list and open invitations to them are cancelled. Domain verification (SPF/DKIM/DMARC) and DNS are a separate, not-yet-approved step.
-
-**Rollback.** Set `SIGNOFF_ENABLED=false`: new requests, customer routes and sends return 404 and no mail is sent. Acknowledgments already stored stay in the database. Fixes ship as new forward migrations; tables holding signed records are not dropped by default.
-
-**Applying it.** The migration is additive but has **not** been applied to the development or any other project. Applying it, enabling the flag with real mail, DNS changes and deployment each need separate approval. Local testing uses the disposable database and mock mode only.
-
-API: worker `GET /api/signoff/config`, `GET|POST /api/signoff/requests`, `POST /api/signoff/requests/:id/{revoke,resend}`, `GET /api/signoff/outbox` (mock only); customer `POST /api/signoff/{gate,code,verify,snapshot,respond,opt-out}`; `POST /api/webhooks/resend`. Page: `/signoff`, `/signoff/privacy`.
+`supabase/config.toml` is for the local stack only and changes no hosted setting.
 
 ## Deployment checklist
 
@@ -166,7 +171,7 @@ Not deployed yet. Before hosting, and after approval of each action:
 ## Limits
 
 - Matching rules are written for the seeded heat-pump requirements; arbitrary job postings are not supported yet.
-- Work records and checklists can be edited (see Customer sign-off); certifications, training and other types cannot yet, and nothing can be deleted. Each rehearsal uses a new worker instead.
-- There is no reviewer or issuer workflow, so nothing becomes *independently confirmed* through the app.
-- Sign-in uses provisioned accounts; there is no self-service sign-up.
+- Work records and checklists can be edited; certifications, training and other types cannot yet, records that are independently confirmed cannot be edited, and nothing can be deleted.
+- Supervisor review and customer acknowledgment are deliberately not verification: nothing becomes *independently confirmed* through the app, and there is no issuer workflow.
+- Sign-up is invite-only by default (`SIGNUP_MODE`); there is no password-reset page yet. No organization or employer accounts.
 - Long provider outages degrade to manual capture and honest "unavailable" states; outage behavior has not been exhaustively failure-injected.
