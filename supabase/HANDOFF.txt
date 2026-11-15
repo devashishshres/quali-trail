@@ -215,6 +215,13 @@ PREVIEWS
   Deployments (filter by branch) that nothing newer than 2026-11-15 07:07 UTC exists for these branches.
 - Older previews of PRs #6-#9 still exist behind Vercel login until deleted (needs approval).
 
+STATUS 2026-11-15 (development project ighnwgkqvajfkhmopttg): steps 1-4 below are DONE. Dashboard check showed
+1-5 complete and unrecorded; backup taken (outside the repo); 1-5 marked applied (no replay); dry run listed exactly
+the three release files; the three were applied without error. All eight versions now match local/remote. Existing
+rows unchanged (fingerprints of workers/evidence/match_runs/requirement_results identical; workers gained only the
+null employment_arrangement column); Sam still 2 of 4. New tables/functions refuse the publishable key; all empty.
+Nothing merged or deployed; features remain off. Do NOT run these steps again.
+
 1. RECONCILE MIGRATION HISTORY (read-only first; do NOT db push yet)
    All five migrations on main were installed through the SQL editor, so the CLI history is probably empty.
    a) Run scripts/sql/verify-installed-schema.sql (read-only) in the SQL editor, or after linking:
