@@ -11,6 +11,7 @@ const Text = (n: number) => z.string().max(n);
 export const TaskPartStatus = z.enum([
   "documented", // stated in the record's title, skills or work performed, affirmatively
   "assisted", // the record says the person assisted, helped or observed
+  "checked_only", // the record says the person checked or verified it (e.g. "verified refrigerant charge"), not performed it
   "by_others", // the record says someone else did it ("done by another crew")
   "negated", // the record says it was not done
   "summary_only", // mentioned only in the record's free-text summary or equipment list

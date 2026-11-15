@@ -9,7 +9,8 @@ function rec(activities: string[], summary: string | null = null): Evidence {
   return { id: `e0000000-0000-4000-8000-${String(n).padStart(12, "0")}`, workerId: "a0000000-0000-4000-8000-000000000001", type: "work_record", title: "Fictional job record", date: "2025-03-01", issuer: null, structuredData: { skills: [], activities, equipment: [], expirationDate: null, credentialNumber: null, summary }, sourceKind: "seed", sourceAvailable: true, verificationStatus: "self_reported", indexStatus: "indexed", indexError: null, isSynthetic: true, version: 1, createdAt: "2026-11-15T00:00:00Z", updatedAt: "2026-11-15T00:00:00Z" };
 }
 const records = [rec(["Brazed line set"]), rec(["Assisted the lead with evacuation"]), rec(["Startup was done by another crew"]), rec(["Did not pressure test the system"]), rec(["Visited site"], "Charged the system to spec.")];
-const g = (t: string, field: "asks" | "unclear" | "nextStep" = "nextStep") => groundingProblem(t, records, field);
+const REQ = "Proficiency with brazing, pressure testing, evacuation, refrigerant charging, leak testing and system start-up";
+const g = (t: string, requirementText = REQ) => groundingProblem(t, records, requirementText);
 
 describe("claims about the worker need grounding, not just a blocked-word list", () => {
   it.each([
@@ -46,7 +47,7 @@ describe("AI text cannot contradict the task check", () => {
     ["Pressure testing was carried out.", "not done"],
     ["Refrigerant charging is part of the work history.", "summary only"],
     ["Leak testing appears in the work.", "not found"],
-  ])("%s (%s) is rejected", (t) => expect(g(t, "unclear")).toBe("contradicts_records"));
+  ])("%s (%s) is rejected", (t) => expect(g(t)).toBe("contradicts_records"));
 
   it.each([
     "Evacuation is listed as assisted only",
@@ -55,14 +56,7 @@ describe("AI text cannot contradict the task check", () => {
     "Refrigerant charging is mentioned only in a summary",
     "Leak testing is not mentioned",
     "Brazing appears in the line set record", // documented: no limitation needed
-  ])("keeping the limitation is allowed: %s", (t) => expect(g(t, "unclear")).toBeNull());
-
-  it("what the line asks may name tasks but may not say anything was done or mention the worker", () => {
-    expect(g("The employer wants brazing, evacuation, pressure testing and startup work.", "asks")).toBeNull();
-    expect(g("The line asks for brazing or soldering.", "asks")).toBeNull();
-    expect(g("Evacuation was done on these jobs.", "asks")).toBe("contradicts_records");
-    expect(g("It asks for brazing, which your records show.", "asks")).toBe("worker_claim");
-  });
+  ])("keeping the limitation is allowed: %s", (t) => expect(g(t)).toBeNull());
 });
 
 describe("quoted record descriptions", () => {
@@ -70,7 +64,7 @@ describe("quoted record descriptions", () => {
     const r = rec(["Assisted the lead with evacuation", "Replaced thermostat"], "Charged the system; customer Jane Roe");
     expect(quoteRecord(r, "Proficiency with evacuation and refrigerant charging")).toBe('Work performed: "Assisted the lead with evacuation" (self-reported).');
   });
-  it("fall back to the title when no line relates", () => {
-    expect(quoteRecord(rec(["Replaced thermostat"]), "Ability to read blueprints")).toBe('Title only: "Fictional job record" (self-reported).');
+  it("return nothing when no permitted field relates (a record is never linked by its title alone)", () => {
+    expect(quoteRecord(rec(["Replaced thermostat"]), "Ability to read blueprints")).toBeNull();
   });
 });

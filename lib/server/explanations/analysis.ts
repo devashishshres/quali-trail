@@ -16,7 +16,8 @@
 import type { Evidence, Requirement, ReviewReason } from "@/lib/types";
 import type { RelatedRecord, RequirementExplanation, TaskBreakdown } from "@/lib/types/explanations";
 import type { Candidate } from "../matching/evaluate";
-import { groundingProblem, quoteRecord, type GroundingProblem } from "./grounding";
+import { groundingProblem, quoteRecord, relevantExcerpts, type GroundingProblem } from "./grounding";
+import { tasksIn } from "./tasks";
 import { taskBreakdown } from "./tasks";
 
 /* ------------------------------------------------------------------ */
@@ -43,8 +44,11 @@ export const AI_UNAVAILABLE_STEP = "The AI-assisted explanation isn't available 
 /* Plan per requirement                                                */
 /* ------------------------------------------------------------------ */
 
-/** Records sent or shown must be clearly related: retrieval similarity ≥ this, or a recognised task in their wording. */
-export const RELATED_MIN_SIMILARITY = 0.5;
+/**
+ * A record is related ONLY when one of its permitted fields (title, work performed, skills, equipment) has an excerpt
+ * that names a task of the line or shares a distinctive word with it (grounding.ts `relevantExcerpts`). Memory
+ * similarity only decides which records are looked at, and in what order; it never makes a record related.
+ */
 export const MAX_RECORDS_PER_REQUIREMENT = 5;
 
 const STUB_GENERIC = new Set(["ability", "experience", "required", "preferred", "proficiency", "knowledge", "systems", "system", "certification", "residential", "commercial", "years", "valid", "working", "strong", "skills"]);
@@ -76,9 +80,10 @@ export function plan(requirement: Requirement, candidates: Candidate[]): Plan {
   const all = candidates.map((c) => c.evidence);
   const breakdown = taskBreakdown(requirement.originalText, all);
   const taskIds = new Set(breakdown?.parts.flatMap((p) => p.evidenceIds) ?? []);
-  const records = candidates
-    .filter((c) => (c.memorySimilarity ?? 0) >= RELATED_MIN_SIMILARITY || taskIds.has(c.evidence.id))
+  const records = [...candidates]
+    .sort((a, b) => (b.memorySimilarity ?? 0) - (a.memorySimilarity ?? 0))
     .map((c) => c.evidence)
+    .filter((e) => relevantExcerpts(e, requirement.originalText).length > 0)
     .slice(0, MAX_RECORDS_PER_REQUIREMENT);
 
   if (elig.length) {
@@ -185,7 +190,6 @@ export function buildModelInput(plans: Plan[]): { input: ModelInput; refs: RefMa
 
 export interface ModelItem {
   ref: string;
-  asks: string;
   noRelatedEvidence: boolean;
   /** Refs of supplied records the model judges related. The model never describes them (see quoteRecord). */
   related: string[];
@@ -202,7 +206,6 @@ export function parseModelItems(raw: unknown): ModelItem[] | null {
     const x = (o ?? {}) as Record<string, unknown>;
     return {
       ref: clean(x.ref, 10),
-      asks: clean(x.asks, 500),
       noRelatedEvidence: x.noRelatedEvidence === true,
       related: (Array.isArray(x.related) ? x.related : []).slice(0, 10).map((r) => clean(typeof r === "string" ? r : (r as Record<string, unknown>)?.evidenceRef, 10)),
       unclear: (Array.isArray(x.unclear) ? x.unclear : []).slice(0, 8).map((u) => clean(u, 300)).filter(Boolean),
@@ -213,6 +216,7 @@ export function parseModelItems(raw: unknown): ModelItem[] | null {
 
 const UNCLEAR: Record<Exclude<TaskBreakdown["parts"][number]["status"], "documented">, string> = {
   assisted: "assisted or observed only",
+  checked_only: "the record mentions checking or verifying it, not performing it",
   by_others: "done by someone else, according to the record",
   negated: "the record says it was not done",
   summary_only: "mentioned only in a record's summary",
@@ -260,7 +264,7 @@ export function validateModelItems(items: ModelItem[] | null, refs: RefMap): { e
   const withhold = (p: Plan, reason: Withheld): RequirementExplanation => ({ ...deterministicItem(p), withheld: reason });
   const explanations = [...refs.requirementByRef.entries()].map(([qref, p]) => {
     const it = byRef.get(qref);
-    if (!it || !it.asks || !it.nextStep) return withhold(p, "missing");
+    if (!it || !it.nextStep) return withhold(p, "missing");
     const allowed = refs.allowed.get(qref)!;
     const unknown = it.related.filter((r) => !allowed.has(r));
     if (unknown.length) {
@@ -269,21 +273,41 @@ export function validateModelItems(items: ModelItem[] | null, refs: RefMap): { e
     }
     const cited = [...new Set(it.related)];
     if (it.noRelatedEvidence ? cited.length > 0 : cited.length === 0) return withhold(p, "inconsistent");
-    const texts: [string, "asks" | "unclear" | "nextStep"][] = [[it.asks, "asks"], [it.nextStep, "nextStep"], ...it.unclear.map((u): [string, "unclear"] => [u, "unclear"])];
-    for (const [t, field] of texts) {
-      const problem = groundingProblem(t, p.records, field);
+    for (const t of [it.nextStep, ...it.unclear]) {
+      const problem = groundingProblem(t, p.records, p.requirement.originalText);
       if (problem) return withhold(p, problem);
     }
     const base = deterministic(p, "no_related", null);
-    const unclear = [...base.unclear, ...it.unclear.filter((u) => !base.unclear.includes(u))].slice(0, 8);
-    if (it.noRelatedEvidence) return { ...base, nextStep: it.nextStep, asks: it.asks, unclear };
-    const related: RelatedRecord[] = cited.slice(0, 5).map((r) => {
+    const unclear = dedupeUnclear(p, base.unclear, it.unclear, it.nextStep);
+    if (it.noRelatedEvidence) return { ...base, nextStep: it.nextStep, unclear };
+    const related: RelatedRecord[] = cited.slice(0, 5).flatMap((r) => {
       const e = refs.evidenceByRef.get(r)!;
-      return { evidenceId: e.id, evidenceVersion: e.version, evidenceTitle: e.title.slice(0, 300), documents: quoteRecord(e, p.requirement.originalText) };
+      const documents = quoteRecord(e, p.requirement.originalText);
+      return documents ? [{ evidenceId: e.id, evidenceVersion: e.version, evidenceTitle: e.title.slice(0, 300), documents }] : [];
     });
-    return { ...base, kind: "ai" as const, asks: it.asks, related, unclear, nextStep: it.nextStep };
+    if (!related.length) return withhold(p, "inconsistent");
+    return { ...base, kind: "ai" as const, related, unclear, nextStep: it.nextStep };
   });
   return { explanations, rejectedReferences: rejected };
+}
+
+const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+
+/**
+ * Unclear points: the task check's limitations first (always kept), then AI points that add something. An AI point
+ * is dropped when it names a task the task check already lists, repeats another point, or repeats the next step.
+ */
+export function dedupeUnclear(p: Plan, base: string[], ai: string[], nextStep: string): string[] {
+  const covered = new Set(p.breakdown?.parts.filter((x) => x.status !== "documented").map((x) => x.id) ?? []);
+  const seen = new Set([...base.map(key), key(nextStep)]);
+  const out = [...base];
+  for (const u of ai) {
+    const k = key(u);
+    if (!k || seen.has(k) || tasksIn(u).some((t) => covered.has(t.id))) continue;
+    seen.add(k);
+    out.push(u);
+  }
+  return out.slice(0, 8);
 }
 
 export type Withheld = GroundingProblem | "unknown_reference" | "inconsistent" | "missing";

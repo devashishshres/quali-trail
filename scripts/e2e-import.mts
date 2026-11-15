@@ -296,7 +296,9 @@ if (PHASE === "explain") {
     console.log(`      breakdown: ${(tasks.match(/From your records' wording: (.*)/) ?? ["", "(none)"])[1]}`);
     check("partial support: only brazing documented", /From your records' wording: Brazing documented; /.test(tasks));
     check("assisted, done by others, not done and summary-only are stated as such", /evacuation: assisted or observed only/.test(tasks) && /startup: done by someone else/.test(tasks) && /pressure testing: the record says it was not done/.test(tasks) && /refrigerant charging: mentioned only in a record's summary/.test(tasks), tasks.split("\n").find((l) => l.includes("wording")));
-    check("AI-written parts are labelled", /What this asks for \(AI-written\)/.test(tasks) && /Suggested next step \(AI-written\)/.test(tasks));
+    const shared = await p.$$eval("[data-shared-steps] li", (els) => els.map((el) => ({ kind: (el as HTMLElement).dataset.sharedStepKind, text: (el as HTMLElement).innerText })));
+    check("AI-written parts are labelled; the employer's wording is shown, not restated", !/What this asks for/.test(sec) && (/Suggested next step \(AI-written\)/.test(tasks) || shared.some((x) => x.kind === "ai" && /^\(AI-written\)/.test(x.text))), JSON.stringify(shared));
+    check("a next step shared by several lines is listed once, with its line count", shared.every((x) => /\(\d+ lines\)$/.test(x.text)) && pa.every((x) => !shared.some((s) => x.text.includes(s.text.replace(/^\(AI-written\) /, "").replace(/ \(\d+ lines\)$/, "")))), JSON.stringify(shared));
     check("record descriptions are quoted from the record, not AI-written", /Records the AI linked to this line \(quoted from each record\)/.test(tasks) && tasks.includes('Work performed: "Brazed copper line set" (self-reported).') && !/AI-written descriptions/.test(tasks));
     check("the task check's limitations are listed under 'Not established or unclear'", ["evacuation: assisted or observed only", "startup: done by someone else", "pressure testing: the record says it was not done", "refrigerant charging: mentioned only in a record's summary"].every((x) => (tasks.split("Not established or unclear")[1] ?? "").includes(x)));
     check("alternatives (ductwork OR line sets) stated as such", /The line accepts any one of these\. Line sets documented; ductwork not established\./.test(pa[5]?.text ?? ""));
@@ -340,8 +342,8 @@ if (PHASE === "explain") {
     const jobB = await importJob(p, "Fictional Service Tech (stub:bad-ref)");
     const runB = await evaluateAndSave(workerId, jobB);
     const xb = await api(p, `/api/matches/${runB.runId}/explanations`, "POST");
-    const bItems = (xb.j?.explanations?.items ?? []) as { kind: string; withheld: string | null; asks: string | null; related: { evidenceId: string }[] }[];
-    check("unknown reference: counted, and the whole AI explanation for that line withheld", xb.s === 200 && xb.j.explanations.rejectedReferences === 1 && bItems[0]?.kind === "ai_unavailable" && bItems[0]?.withheld === "unknown_reference" && bItems[0]?.asks === null && bItems[0]?.related.length === 0, JSON.stringify({ s: xb.s, r: xb.j?.explanations?.rejectedReferences, k: bItems[0]?.kind, w: bItems[0]?.withheld }));
+    const bItems = (xb.j?.explanations?.items ?? []) as { kind: string; withheld: string | null; related: { evidenceId: string }[] }[];
+    check("unknown reference: counted, and the whole AI explanation for that line withheld", xb.s === 200 && xb.j.explanations.rejectedReferences === 1 && bItems[0]?.kind === "ai_unavailable" && bItems[0]?.withheld === "unknown_reference" && bItems[0]?.related.length === 0, JSON.stringify({ s: xb.s, r: xb.j?.explanations?.rejectedReferences, k: bItems[0]?.kind, w: bItems[0]?.withheld }));
     check("unknown reference: the other AI line is unaffected", bItems[5]?.kind === "ai" && bItems.flatMap((i) => i.related.map((r) => r.evidenceId)).every((id) => own.has(id)));
     await p.goto(`${APP}/opportunities?job=${jobB}`, { waitUntil: "networkidle0" });
     await p.waitForSelector("[data-section=related-evidence]");
@@ -367,7 +369,7 @@ if (PHASE === "explain") {
       const before2 = await snapshot(workerId, r.runId);
       const x = await api(p, `/api/matches/${r.runId}/explanations`, "POST");
       const it0 = x.j?.explanations?.items?.[0];
-      check(`${hook}: whole AI explanation withheld (${why}); deterministic check kept; results unchanged`, x.s === 200 && it0?.kind === "ai_unavailable" && it0?.withheld === why && it0?.asks === null && /Brazing documented/.test(it0?.breakdown?.sentence ?? "") && (await snapshot(workerId, r.runId)) === before2 && !/satisfy|can do this work|was performed/i.test(JSON.stringify(x.j?.explanations)), JSON.stringify({ s: x.s, k: it0?.kind, w: it0?.withheld }));
+      check(`${hook}: whole AI explanation withheld (${why}); deterministic check kept; results unchanged`, x.s === 200 && it0?.kind === "ai_unavailable" && it0?.withheld === why && /Brazing documented/.test(it0?.breakdown?.sentence ?? "") && (await snapshot(workerId, r.runId)) === before2 && !/satisfy|can do this work|was performed/i.test(JSON.stringify(x.j?.explanations)), JSON.stringify({ s: x.s, k: it0?.kind, w: it0?.withheld }));
     }
 
     // C3. Repeated requests make one generation: parallel API calls, and a double click in the UI.
@@ -405,8 +407,8 @@ if (PHASE === "explain") {
     const jobD = await importJob(t2.p, "Fictional Mini-Split Installer (explain test)");
     const runD = await evaluateAndSave(t2.workerId, jobD);
     const xd = await api(t2.p, `/api/matches/${runD.runId}/explanations`, "POST");
-    const dItems = (xd.j?.explanations?.items ?? []) as { kind: string; related: unknown[]; asks: string | null }[];
-    check("no evidence: every non-eligibility line says nothing related, no AI text", xd.s === 200 && dItems.length === 6 && dItems.every((i) => (i.kind === "no_related" || i.kind === "eligibility") && i.related.length === 0 && i.asks === null), JSON.stringify(dItems.map((i) => i.kind)));
+    const dItems = (xd.j?.explanations?.items ?? []) as { kind: string; related: unknown[] }[];
+    check("no evidence: every non-eligibility line says nothing related, no AI text", xd.s === 200 && dItems.length === 6 && dItems.every((i) => (i.kind === "no_related" || i.kind === "eligibility") && i.related.length === 0), JSON.stringify(dItems.map((i) => i.kind)));
     const foreign = await api(t2.p, `/api/matches/${runA.runId}/explanations`, "POST");
     check("another technician's run is not available", foreign.s === 404, String(foreign.s));
 

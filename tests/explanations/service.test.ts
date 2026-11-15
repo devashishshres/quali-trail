@@ -113,7 +113,7 @@ describe("explainRun", () => {
   it("an unknown record reference withholds that whole explanation and is counted", async () => {
     const x = await withHook("stub:bad-ref");
     expect(x.rejectedReferences).toBe(1);
-    expect(x.items[0]).toMatchObject({ kind: "ai_unavailable", withheld: "unknown_reference", asks: null, related: [] });
+    expect(x.items[0]).toMatchObject({ kind: "ai_unavailable", withheld: "unknown_reference", related: [] });
     expect(x.items[0].breakdown!.sentence).toMatch(/^Brazing documented/); // deterministic content kept
   });
 
@@ -121,7 +121,7 @@ describe("explainRun", () => {
     ["stub:claim", "fulfilment_claim"],
     ["stub:soft-claim", "worker_claim"],
   ])("%s: an ungrounded claim about the worker is withheld (%s)", async (hook, why) => {
-    expect((await withHook(hook)).items[0]).toMatchObject({ kind: "ai_unavailable", withheld: why, asks: null });
+    expect((await withHook(hook)).items[0]).toMatchObject({ kind: "ai_unavailable", withheld: why });
   });
 
   it("stub:contradict: AI text saying evacuation 'was performed' when no record states it is withheld", async () => {

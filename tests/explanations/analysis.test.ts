@@ -105,7 +105,7 @@ describe("validating model output", () => {
   const a = plan(req("Proficiency with brazing and pressure testing"), [cand(brazing)]);
   const b = plan(req("Experience with ductwork or line sets"), [cand(rec("Duct job", ["Installed ductwork"]))]);
   const { refs } = buildModelInput([a, b]); // a: Q1 → E1 ; b: Q2 → E2
-  const ok = (over: Partial<ModelItem> = {}): ModelItem => ({ ref: "Q1", asks: "The employer wants brazing and pressure testing work.", noRelatedEvidence: false, related: ["E1"], unclear: ["Pressure testing is not stated"], nextStep: "Add pressure testing to the record if you did it.", ...over });
+  const ok = (over: Partial<ModelItem> = {}): ModelItem => ({ ref: "Q1", noRelatedEvidence: false, related: ["E1"], unclear: ["Pressure testing is not stated"], nextStep: "Add pressure testing to the record if you did it.", ...over });
   const run = (items: ModelItem[]) => validateModelItems(items, refs);
   const first = (items: ModelItem[]) => run(items).explanations.find((x) => x.requirementId === a.requirement.id)!;
 
@@ -127,7 +127,7 @@ describe("validating model output", () => {
   ])("citing %s withholds the WHOLE explanation, not just the reference", (_n, related) => {
     const { explanations, rejectedReferences } = run([ok({ related })]);
     expect(rejectedReferences).toBe(1);
-    expect(explanations[0]).toMatchObject({ kind: "ai_unavailable", withheld: "unknown_reference", asks: null, related: [] });
+    expect(explanations[0]).toMatchObject({ kind: "ai_unavailable", withheld: "unknown_reference", related: [] });
     expect(explanations[0].nextStep).not.toMatch(/pressure testing to the record/); // the AI's text is gone too
     expect(explanations[0].breakdown).not.toBeNull();
   });
@@ -151,10 +151,13 @@ describe("validating model output", () => {
     expect(first([ok({ nextStep })])).toMatchObject({ kind: "ai_unavailable", withheld: why });
   });
 
-  it("the same checks apply to every unclear item and to what the line asks", () => {
+  it("the same checks apply to every unclear item", () => {
     expect(first([ok({ unclear: ["You did the pressure testing"] })]).withheld).toBe("worker_claim");
-    expect(first([ok({ asks: "It asks for brazing, which you have." })]).withheld).toBe("worker_claim");
-    expect(first([ok({ asks: "Brazing was done on the line set job." })]).withheld).toBe("contradicts_records");
+    expect(first([ok({ unclear: ["Pressure testing was done on the line set job"] })]).withheld).toBe("contradicts_records");
+  });
+
+  it("AI explanations never carry an AI restatement of the requirement", () => {
+    expect(first([ok()]).asks).toBeNull();
   });
 
   it("allows hedged, instructional and negative wording", () => {

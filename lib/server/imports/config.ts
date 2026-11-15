@@ -6,7 +6,7 @@
  *  - TINYFISH_MODE                "live" (default) or "stub" (fictional listings; isolated local only)
  *  - IMPORT_DAILY_LIMIT           provider retrievals per technician per 24 h (default 10, max 100)
  */
-import { isolatedLocal, type ConfigProblem } from "../config";
+import { isolatedLocal, rateLimitProblems, type ConfigProblem } from "../config";
 
 export const importEnabled = (env: NodeJS.ProcessEnv = process.env) => env.OPPORTUNITY_IMPORT_ENABLED === "true";
 
@@ -31,5 +31,6 @@ export function importConfigProblems(env: NodeJS.ProcessEnv = process.env): Conf
     out.push({ name: "TINYFISH_API_KEY", problem: "is not set (required when OPPORTUNITY_IMPORT_ENABLED=true)" });
   }
   if (!env.GEMINI_API_KEY) out.push({ name: "GEMINI_API_KEY", problem: "is not set (import drafts need it)" });
+  out.push(...rateLimitProblems(env, "import"));
   return out;
 }

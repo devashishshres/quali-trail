@@ -61,6 +61,21 @@ Pending: the live provider acceptance test, then release (both below; each step 
   positives from "ability" wording in the AI's restatement of the line). UI acceptance 18/18; report printable.
 - Production code, Vercel settings and flags unchanged. PR #11 unmerged.
 
+### Accuracy fixes after the live test (local only; live retest NOT yet run)
+
+Each live problem has a synthetic regression fixture in `tests/explanations/live-regressions.test.ts`:
+- "Verified refrigerant charge…" counted as charging → now `checked_only`, stated as a limitation.
+- Unrelated records linked to "ServiceTitan knowledge preferred" and the HVAC electrical line by similarity/title →
+  relevance now needs a related line in the record's permitted fields; similarity only orders.
+- "Installation documented" on the team, wiring-diagram and diagnosing lines via "installation team / instructions /
+  -related" → modifier uses are not tasks.
+- 4 false `worker_claim` withholds from the AI restating the line → the model no longer restates it, and the
+  employer's own wording is masked before the ability/fulfilment checks.
+- Duplicated unclear points and next steps → deduplicated; shared next steps listed once.
+- SIGNOFF_PEPPER missing from `.env.local` → documented as required (see Environment variable names).
+Local results: unit/integration 651/651; tsc and eslint clean; isolated e2e: explain 46/46, flag-on 57/57,
+flag-off 17/17, e2e-local 95/95.
+
 ### WARNING: local configuration touches hosted data
 
 The private `.env.local` used for development points at the hosted Supabase project `ighnwgkqvajfkhmopttg`, which
@@ -82,8 +97,15 @@ Hosted-dev work: `NEXT_PUBLIC_DATA_MODE`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBL
 `SUPERMEMORY_NAMESPACE_PREFIX`, `DEMO_USER_EMAIL`, `DEMO_USER_PASSWORD`, `EMAIL_MODE`, `SIGNOFF_ENABLED`,
 `SUPERVISOR_REVIEW_ENABLED`, `SIGNUP_MODE`, `APP_BASE_URL`, `SIGNOFF_PEPPER`, `OPPORTUNITY_IMPORT_ENABLED`,
 `TINYFISH_MODE`, `IMPORT_DAILY_LIMIT`, `TINYFISH_API_KEY`.
-Not available on the original laptop (not invented): `SIGNOFF_PEPPER` (only needed for sign-up, password reset and
-onboarding) and `TINYFISH_API_KEY` (the user adds it to `.env.local` when the live test is approved).
+Not available on the original laptop (not invented): `SIGNOFF_PEPPER` and `TINYFISH_API_KEY` (the user adds the
+TinyFish key to `.env.local` when a live test is approved).
+
+`SIGNOFF_PEPPER` is REQUIRED for import and explanation rate limiting (both features report a configuration problem
+and stay off without it), as well as sign-up, password reset and onboarding. It is absent from the hosted-dev
+`.env.local`. Never copy, replace or rotate production's pepper for development. For isolated local work, keep a
+SEPARATE persistent local value outside the repo, e.g. `~/.config/qualitrail/isolated-local.env` (mode 600, created
+once with `openssl rand -hex 32`, never printed), and load it with `set -a; . <that file>; set +a`. A hosted-dev test
+needs its own approved, non-production value.
 Resend variables are deliberately omitted locally (email off).
 
 ### Fresh-laptop setup
@@ -107,9 +129,10 @@ Isolated local stack (no hosted data, no providers):
     # In a shell WITHOUT the hosted .env.local values exported:
     export NEXT_PUBLIC_DATA_MODE=live NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<local publishable key> SUPABASE_SECRET_KEY=<local secret key> \
-      APP_BASE_URL=http://localhost:3100 SIGNOFF_PEPPER=<any local 32+ char value> SIGNUP_MODE=closed \
+      APP_BASE_URL=http://localhost:3100 SIGNUP_MODE=closed \
       SIGNOFF_ENABLED=false SUPERVISOR_REVIEW_ENABLED=false EMAIL_MODE=off \
       OPPORTUNITY_IMPORT_ENABLED=true TINYFISH_MODE=stub GEMINI_API_KEY=local-stub-unused
+    set -a; . ~/.config/qualitrail/isolated-local.env; set +a   # separate persistent local SIGNOFF_PEPPER
     # Next reads .env.local too; move it aside (or use a separate clone) so hosted values cannot leak in.
     npm run build && npx next start -p 3100 &
     E2E_STATE=$PWD/../e2e-import-state.json npx tsx scripts/e2e-import.mts
@@ -180,9 +203,20 @@ Hits are kept only if they are the technician's current, indexed records.
 ### What the model may contribute, and how its output is checked
 
 Input text is treated as untrusted data; the prompt says to ignore instructions inside it. The model may only:
-(a) restate what the line asks, (b) CHOOSE which supplied records relate, by ref, (c) list what is unclear,
-(d) suggest one next step. It never describes a record: each cited record is shown with QUOTES of its own
-title/skills/work performed/equipment lines (`quoteRecord`, never the summary).
+(a) CHOOSE which supplied records relate, by ref, (b) list what is unclear, (c) suggest one next step. It does NOT
+restate the requirement: the employer's own wording is shown. It never describes a record: each cited record is shown
+with QUOTES of its own work performed/skills/equipment/title lines that relate to the line (`quoteRecord`, never the
+summary). A cited record with no such line is dropped; if none remain, the item is withheld (`inconsistent`).
+
+Relevance (`relevantExcerpts`) comes ONLY from the record's permitted fields sharing a recognised task of the line or
+a distinctive word with it. Memory similarity only orders candidates; it never makes a record related, and a title
+alone never links a record (regression: "ServiceTitan knowledge preferred" and "HVAC electrical systems" linked
+unrelated records by similarity). Task words used as modifiers ("installation team", "installation instructions",
+"installation-related issues") are not tasks, and task words never count as plain shared words.
+
+Charging: "verified/checked/measured refrigerant charge", "charge was verified" and "charge check" are
+`checked_only` ("the record mentions checking or verifying it, not performing it"), never documented charging.
+Assisted, observed, negated and by-others wording keep their own statuses.
 
 The WHOLE AI item for a line is withheld (the deterministic content is shown, with the reason) when:
 - it cites any record not supplied for that line (unknown or another line's): one bad reference discards the
@@ -192,13 +226,20 @@ The WHOLE AI item for a line is withheld (the deterministic content is shown, wi
   - contains a ref (E1/Q1);
   - makes a positive statement about the technician or their records ("you have…", "your records show…") that
     is not a hedge/negation or an instruction — positive facts come only from the task check and quotes;
-  - judges ability in either direction ("experienced", "lacks", "not qualified");
+  - judges ability in either direction ("experienced", "lacks", "not qualified", "ability is evident"). The
+    employer's own wording (any 2+ word run of the line) is masked first, so "Ability to read wiring diagrams is
+    not stated" is allowed; the live test's false positives came from this;
   - uses fulfilment language ("satisfies", "meets", "qualifies", "sufficient", "demonstrates", "confirms",
     "matches", "covers", "fit", …) without a negation/hedge before it (or "ask … to …");
   - mentions a task whose status in the supplied records is not "documented" without stating the limitation
-    (assisted / someone else / not / summary / unclear) in the same clause;
-  - in "what the line asks": mentions the technician or records at all, or says anything "was done".
+    (assisted / someone else / checked / not / summary / unclear) in the same clause.
 The task check's limitations are always listed first under "Not established or unclear", so the AI cannot drop them.
+AI "unclear" points that repeat a task the check already lists, repeat another point or repeat the next step are
+dropped. A next step shared by several lines is shown once under "Next step for several lines" (still labelled).
+
+Rejected AI text is never stored, logged or retained for debugging: only the reason code (`withheld`) is kept.
+Failures are reproduced with synthetic fixtures (`tests/explanations/live-regressions.test.ts`), not saved output.
+Retaining rejected text would need a separately approved retention design.
 These rules are deliberately strict; a false rejection only loses AI wording, never checked results.
 
 ### Caching and currency

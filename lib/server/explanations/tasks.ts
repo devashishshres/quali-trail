@@ -20,6 +20,8 @@ export interface TaskTerm {
   label: string;
   /** Normalised phrases (see normalizeLine: lower case, hyphens to spaces). Explicit forms only. */
   phrases: string[];
+  /** Noun phrases that, next to a checking verb, mean the task was only CHECKED ("verified refrigerant charge"). */
+  checkOnly?: { phrases: string[]; before: RegExp; after: RegExp };
 }
 
 /** Explicit synonyms only. A form not listed here is simply not recognised; it is never guessed. */
@@ -40,6 +42,13 @@ export const TASK_TERMS: TaskTerm[] = [
     id: "refrigerant_charging",
     label: "refrigerant charging",
     phrases: ["refrigerant charging", "charging", "charged", "charge refrigerant", "charged refrigerant", "refrigerant charge", "recharge", "recharged", "recharging"],
+    // Checking, verifying or measuring an existing charge is not charging the system.
+    // Verbs ("charged", "recharged", "charging") always mean performing it.
+    checkOnly: {
+      phrases: ["refrigerant charge"],
+      before: /\b(?:verif\w*|check\w*|confirm\w*|measur\w*|inspect\w*|test\w*|monitor\w*|read|reading|evaluat\w*|assess\w*)\b/,
+      after: /^ (?:was |were |is )?(?:verified|checked|confirmed|measured|tested|inspected|ok|correct|check|checks|verification|test|reading)\b/,
+    },
   },
   { id: "refrigerant_recovery", label: "refrigerant recovery", phrases: ["refrigerant recovery", "recover refrigerant", "recovered refrigerant", "recovering refrigerant"] },
   { id: "line_sets", label: "line sets", phrases: ["line set", "line sets", "lineset", "linesets"] },
@@ -70,6 +79,12 @@ interface Hit {
   end: number;
 }
 
+/**
+ * A task word used as a modifier names something else, not the task: "installation team", "installation
+ * instructions", "installation-related issues", "maintenance schedule". Those are not task mentions.
+ */
+const MODIFIES_NEXT = /^ (?:team|teams|crew|crews|instructions?|manuals?|issues?|problems?|related|specifications?|specs|documentation|guidelines?|schedules?|procedures?|requirements?|drawings?|diagrams?|tools?|company|companies|department|industry|business|contracts?|plans?)\b/;
+
 /** Longest phrase wins where two overlap ("pressure testing" beats "testing"; "refrigerant charging" beats "charging"). */
 function findTasks(norm: string): Hit[] {
   const all: Hit[] = [];
@@ -77,6 +92,7 @@ function findTasks(norm: string): Hit[] {
     for (const p of term.phrases) {
       for (const m of norm.matchAll(phraseRe(p))) {
         const start = m.index! + (m[0].startsWith(" ") ? 1 : 0);
+        if (MODIFIES_NEXT.test(norm.slice(start + p.length))) continue;
         all.push({ term, start, end: start + p.length });
       }
     }
@@ -120,7 +136,7 @@ const BY_OTHERS =
   /\b(?:by (?:another|other|others|a different|the other|a separate|a second|the lead|the senior|a sub|subcontractors?|someone|an? (?:electrician|helper|apprentice|lead|crew|technician|tech))|another (?:crew|tech|technician|installer|team)|other (?:crew|tech|technician|installer|team)|subcontracted|subbed out)\b/;
 const ASSISTED = /\b(?:assist|assists|assisted|assisting|helped|helping|help with|observed|observing|shadowed|shadowing|watched|under supervision|supervised by|alongside)\b/;
 
-const RANK: TaskPartStatus[] = ["documented", "assisted", "summary_only", "by_others", "negated", "not_found"];
+const RANK: TaskPartStatus[] = ["documented", "assisted", "checked_only", "summary_only", "by_others", "negated", "not_found"];
 
 /** Negation that applies to the task: up to 4 words before it ("did not braze"), or "not/never" just after it
  *  ("startup was not performed"). "Pressure tested, no leaks" is NOT a negated pressure test. */
@@ -138,6 +154,7 @@ function clauseStatus(term: TaskTerm, clause: string): TaskPartStatus | null {
       if (NEGATED.test(before) || NEG_AFTER.test(after)) return "negated";
       if (BY_OTHERS.test(clause)) return "by_others";
       if (ASSISTED.test(clause)) return "assisted";
+      if (term.checkOnly?.phrases.includes(p) && (term.checkOnly.before.test(before) || term.checkOnly.after.test(after))) return "checked_only";
       return "documented";
     }
   }
@@ -157,6 +174,7 @@ export function recordTaskStatus(term: TaskTerm, e: Evidence): TaskPartStatus {
 const PHRASE: Record<TaskPartStatus, (labels: string) => string> = {
   documented: (l) => `${l} documented`,
   assisted: (l) => `${l}: assisted or observed only`,
+  checked_only: (l) => `${l}: the record mentions checking or verifying it, not performing it`,
   by_others: (l) => `${l}: done by someone else, according to the record`,
   negated: (l) => `${l}: the record says it was not done`,
   summary_only: (l) => `${l}: mentioned only in a record's summary`,
@@ -181,6 +199,10 @@ export function taskBreakdown(originalText: string, records: Evidence[]): TaskBr
   const tail = split.uncoveredWording ? " Other wording in the line is not checked here." : "";
   return { connector: split.connector, parts, uncoveredWording: split.uncoveredWording, sentence: `${prefix}${cap(body)}.${tail}`.slice(0, 600) };
 }
+
+/** Every word used in a task phrase: these establish relevance only through task matching (which ignores
+ *  modifier uses such as "installation team"), never as plain shared words. */
+export const TASK_WORDS = new Set(TASK_TERMS.flatMap((t) => t.phrases.flatMap((p) => p.split(" "))));
 
 /** Task terms named anywhere in a piece of text (used to check AI-written text against the breakdown). */
 export function tasksIn(text: string): TaskTerm[] {

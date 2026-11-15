@@ -5,9 +5,9 @@
  *  - AI_EXPLANATIONS_MODE          "live" (default: Supermemory search + Gemini) or "stub" (deterministic local stand-ins
  *                                  for both; isolated local setups only)
  *  - AI_EXPLANATIONS_DAILY_LIMIT   explanation generations per technician per 24 h (default 20, max 200)
- * Live mode also needs GEMINI_API_KEY and SUPERMEMORY_API_KEY.
+ * Live mode also needs GEMINI_API_KEY and SUPERMEMORY_API_KEY. Every mode needs SIGNOFF_PEPPER (rate limiting).
  */
-import { isolatedLocal, type ConfigProblem } from "../config";
+import { isolatedLocal, rateLimitProblems, type ConfigProblem } from "../config";
 
 export const explanationsEnabled = (env: NodeJS.ProcessEnv = process.env) => env.AI_EXPLANATIONS_ENABLED === "true";
 export const explanationsMode = (env: NodeJS.ProcessEnv = process.env): "live" | "stub" => (env.AI_EXPLANATIONS_MODE === "stub" ? "stub" : "live");
@@ -32,6 +32,7 @@ export function explanationsConfigProblems(env: NodeJS.ProcessEnv = process.env)
     if (!env.GEMINI_API_KEY) out.push({ name: "GEMINI_API_KEY", problem: "is not set (explanations need it)" });
     if (!env.SUPERMEMORY_API_KEY) out.push({ name: "SUPERMEMORY_API_KEY", problem: "is not set (explanations search related records)" });
   }
+  out.push(...rateLimitProblems(env, "explanation"));
   return out;
 }
 

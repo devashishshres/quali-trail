@@ -28,7 +28,7 @@ const KIND_NOTE: Record<RequirementExplanation["kind"], string | null> = {
 };
 
 /** One requirement's related-evidence explanation. Links show on screen only. */
-export function RelatedEvidencePanel({ item, heading = true }: { item: RequirementExplanation; heading?: boolean }) {
+export function RelatedEvidencePanel({ item, heading = true, hideNextStep = false }: { item: RequirementExplanation; heading?: boolean; hideNextStep?: boolean }) {
   return (
     <div className="rounded-md border border-dashed border-line bg-white p-4 text-sm" data-related-kind={item.kind}>
       {heading && (
@@ -40,12 +40,6 @@ export function RelatedEvidencePanel({ item, heading = true }: { item: Requireme
       {item.stale && <p className="mt-2 font-semibold text-orange-ink" data-stale>Out of date: your records changed after this was written. Run matching again for a current explanation.</p>}
       {item.withheld && <p className="mt-2" data-withheld={item.withheld}>The AI text for this line was withheld because {WITHHELD[item.withheld]}.</p>}
       {KIND_NOTE[item.kind] && <p className="mt-2">{KIND_NOTE[item.kind]}</p>}
-      {item.asks && (
-        <p className="mt-2">
-          <span className="font-semibold">What this asks for (AI-written): </span>
-          {item.asks}
-        </p>
-      )}
       {item.breakdown && (
         <p className="mt-2" data-breakdown>
           <span className="font-semibold">From your records&apos; wording: </span>
@@ -83,7 +77,7 @@ export function RelatedEvidencePanel({ item, heading = true }: { item: Requireme
           </ul>
         </div>
       )}
-      {item.nextStep && (
+      {item.nextStep && !hideNextStep && (
         <p className="mt-2">
           <span className="font-semibold">Suggested next step{item.kind === "ai" ? " (AI-written)" : ""}: </span>
           {item.nextStep}
@@ -97,6 +91,16 @@ export function RelatedEvidencePanel({ item, heading = true }: { item: Requireme
 export function RelatedEvidenceSection({ opportunity, explanations }: { opportunity: Opportunity; explanations: RunExplanations }) {
   const byReq = new Map(explanations.items.map((x) => [x.requirementId, x]));
   const items = opportunity.requirements.filter((q) => byReq.has(q.id));
+  // A next step shared by several lines is listed once, after the lines, instead of repeated under each.
+  const stepCount = new Map<string, number>();
+  const aiStep = new Set<string>(); // shared steps written by the AI keep their label
+  for (const q of items) {
+    const it = byReq.get(q.id)!;
+    if (!it.nextStep) continue;
+    stepCount.set(it.nextStep, (stepCount.get(it.nextStep) ?? 0) + 1);
+    if (it.kind === "ai") aiStep.add(it.nextStep);
+  }
+  const shared = [...stepCount].filter(([, n]) => n > 1);
   return (
     <section className="break-inside-avoid" data-section="related-evidence" aria-labelledby="related-title">
       <h3 id="related-title" className="font-display text-xl font-semibold">{RELATED_TITLE}</h3>
@@ -122,11 +126,24 @@ export function RelatedEvidenceSection({ opportunity, explanations }: { opportun
           <li key={q.id} className="break-inside-avoid">
             <p className="text-sm font-medium">{q.originalText}</p>
             <div className="mt-1">
-              <RelatedEvidencePanel item={byReq.get(q.id)!} heading={false} />
+              <RelatedEvidencePanel item={byReq.get(q.id)!} heading={false} hideNextStep={(stepCount.get(byReq.get(q.id)!.nextStep ?? "") ?? 0) > 1} />
             </div>
           </li>
         ))}
       </ol>
+      {shared.length > 0 && (
+        <div className="mt-4 text-sm" data-shared-steps>
+          <p className="font-semibold">Next step for several lines</p>
+          <ul className="mt-1 list-disc pl-5">
+            {shared.map(([step, n]) => (
+              <li key={step} data-shared-step-kind={aiStep.has(step) ? "ai" : "fixed"}>
+                {aiStep.has(step) && <span className="font-semibold">(AI-written) </span>}
+                {step} <span className="text-slate">({n} lines)</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </section>
   );
 }

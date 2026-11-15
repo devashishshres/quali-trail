@@ -38,6 +38,17 @@ export function isolatedLocal(env: NodeJS.ProcessEnv = process.env): boolean {
   return app !== null && db !== null && LOOPBACK.has(app) && LOOPBACK.has(db);
 }
 
+/**
+ * Rate limiting (import, explanations, sign-off) hashes its keys with SIGNOFF_PEPPER, so a feature that is rate
+ * limited cannot run without it. Each environment keeps its OWN value: an isolated local setup uses a separate,
+ * persistent local value; production's pepper is never copied, replaced or rotated for development.
+ */
+export function rateLimitProblems(env: NodeJS.ProcessEnv = process.env, feature: string): ConfigProblem[] {
+  if (!env.SIGNOFF_PEPPER) return [{ name: "SIGNOFF_PEPPER", problem: `is not set (${feature} rate limiting needs it)` }];
+  if (env.SIGNOFF_PEPPER.length < 32) return [{ name: "SIGNOFF_PEPPER", problem: "must be at least 32 characters" }];
+  return [];
+}
+
 export const BOOLEAN_FLAGS = ["SIGNOFF_ENABLED", "SUPERVISOR_REVIEW_ENABLED"] as const;
 
 export function configProblems(env: NodeJS.ProcessEnv = process.env): ConfigProblem[] {
