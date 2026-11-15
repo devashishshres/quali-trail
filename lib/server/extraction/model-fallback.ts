@@ -1,12 +1,13 @@
 /** Bounded failover for extraction. No credentials, document text or SDK state. */
 export const MODEL_TIMEOUT_MS = 15_000;
 export const MAX_MODEL_ATTEMPTS = 3;
-const DEFAULT_FALLBACKS = ["gemini-2.5-flash-lite", "gemini-2.5-flash"];
+const DEFAULT_PRIMARY_MODEL = "gemini-3.5-flash-lite";
+const DEFAULT_FALLBACKS = ["gemini-3.5-flash", "gemini-3.1-flash-lite"];
 
 /** Comma-separated overrides; an explicitly empty override disables backups. */
-export function extractionModels(primary: string, configuredFallbacks?: string): string[] {
+export function extractionModels(primary?: string, configuredFallbacks?: string): string[] {
   const fallbacks = configuredFallbacks === undefined ? DEFAULT_FALLBACKS : configuredFallbacks.split(",");
-  const names = [primary, ...fallbacks].map((name) => name.trim().replace(/^models\//, "")).filter(Boolean);
+  const names = [primary?.trim() || DEFAULT_PRIMARY_MODEL, ...fallbacks].map((name) => name.trim().replace(/^models\//, "")).filter(Boolean);
   return [...new Set(names)].slice(0, MAX_MODEL_ATTEMPTS);
 }
 

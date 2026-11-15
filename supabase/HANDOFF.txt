@@ -82,9 +82,10 @@ The demo account is `alex.morgan@demo.qualitrail.dev`; its password remains in l
 
 AUTOMATIC GEMINI FAILOVER
 -------------------------
-GEMINI_MODEL remains the primary. On a model timeout/temporary unavailability,
+Default model order: gemini-3.5-flash-lite, gemini-3.5-flash, gemini-3.1-flash-lite.
+GEMINI_MODEL optionally overrides the primary. On a timeout/temporary unavailability,
 extraction tries GEMINI_FALLBACK_MODELS (comma-separated) in order. If unset,
-the defaults are gemini-2.5-flash-lite,gemini-2.5-flash. An empty value disables
+the backups are gemini-3.5-flash,gemini-3.1-flash-lite. An empty value disables
 backups. Names are deduplicated and at most three models total are attempted,
 with a 15-second client deadline each. Invalid credentials/input and malformed
 output do not trigger model hopping. Exhausted models retain manual review.

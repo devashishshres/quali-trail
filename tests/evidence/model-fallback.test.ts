@@ -5,7 +5,8 @@ afterEach(() => vi.useRealTimers());
 
 describe("extraction model configuration", () => {
   it("uses ordered default backups after the configured primary", () => {
-    expect(extractionModels("gemini-3.1-flash-lite")).toEqual(["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.5-flash"]);
+    expect(extractionModels()).toEqual(["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.1-flash-lite"]);
+    expect(extractionModels("custom-primary")).toEqual(["custom-primary", "gemini-3.5-flash", "gemini-3.1-flash-lite"]);
   });
   it("normalizes, deduplicates and caps configured models", () => {
     expect(extractionModels(" models/primary ", "primary, backup, , models/backup, third, fourth")).toEqual(["primary", "backup", "third"]);

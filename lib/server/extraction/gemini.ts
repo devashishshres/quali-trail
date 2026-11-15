@@ -51,7 +51,7 @@ async function generate(parts: object[], sourceText?: string): Promise<Extracted
     apiKey: requireEnv("GEMINI_API_KEY"),
     httpOptions: { timeout: MODEL_TIMEOUT_MS, retryOptions: { attempts: 1 } },
   });
-  const models = extractionModels(requireEnv("GEMINI_MODEL"), process.env.GEMINI_FALLBACK_MODELS);
+  const models = extractionModels(process.env.GEMINI_MODEL, process.env.GEMINI_FALLBACK_MODELS);
   try {
     const res = await withModelFallback(models, (model, abortSignal) => ai.models.generateContent({
       model,
