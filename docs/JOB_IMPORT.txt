@@ -1,5 +1,126 @@
 # Job import (feature-flagged, off by default)
 
+## HANDOFF (2026-11-15): read this first on a new laptop
+
+**Branch:** `feature/job-import` (draft PR #11, unmerged). **Final implementation commit:** `629a7a9`
+(`d856bd0` feature, `629a7a9` follow-up checks). The commit after that only adds this handoff.
+
+### Status
+
+Done (on the branch, flag off by default):
+- Import by public listing URL (TinyFish Fetch, URL only) or pasted text; verbatim requirement lines; review
+  (priority, display wording, remove, manual-review mark); atomic confirm; "Your evidence fit" summary; report.
+- Deterministic rule catalog, `cannot_assess` everywhere, priority read from listing wording, headline-only term
+  matching (install-only evidence never satisfies install-and-startup), plain-text listings, flag-off behaviour.
+
+Pending:
+1. **"Your next steps"** (requested, NOT started; no code written). Add to the evidence-fit view
+   (`components/opportunities/fit-summary.tsx`, which replaces its "Documentation you could add" list) and the
+   printable report (`app/(dashboard)/reports/page.tsx`). Deterministic guidance per requirement from its actual
+   assessment reason, with no AI call, course search or hiring prediction, and never implying the worker lacks a skill:
+   - Missing document → "upload it if you already hold it" (link `/evidence`).
+   - Incomplete work details → "add or clarify the work performed" (link `/evidence#evidence-<id>`).
+   - Appropriate but self-reported work → link to that record's existing supervisor/customer panels
+     (`/evidence#evidence-<id>`; panels exist only for work_record/checklist with status self_reported or
+     document_supplied, and only when `features.customerSignoff` / `features.supervisorReview` are on in `/api/me`).
+     Never send anything automatically.
+   - `cannot_assess` → "needs manual or employer review", quoting the stored reason (`uncertainties`).
+   Design note from reading the code: reasons are not stored as codes, but every gap string comes from fixed
+   templates in `lib/server/matching/evaluate.ts` that are unchanged since the first commit:
+   `A record that directly documents: …` (missing), `"<title>" does not state <what>.` (incomplete),
+   `A supporting document or independent confirmation for this record` (self-reported, appropriate),
+   the "appear only in this record's summary" uncertainty (ambiguous → clarify). Multi-part lines prefix each with
+   `<part label>: `. Plan: move these templates into one shared module used by both the evaluator and a pure
+   `nextSteps(result)` function, so older saved runs work without a schema change. Test with real evaluator output.
+2. Live provider acceptance test (below). 3. Release (below).
+
+### Checks actually run (on 629a7a9, this laptop)
+
+- `npm test` 377 passed; `npm run typecheck`, `npm run lint`, `npm run build` clean.
+- DB tests on the local Supabase CLI Postgres (port 54322): 90/90.
+- `scripts/e2e-import.mts` on the isolated local stack: 49/49 flag on, 10/10 flag off; `scripts/e2e-local.mjs`
+  95/95 flag off (earlier commit, unchanged paths).
+- Limitations: TinyFish and Gemini were stubbed. Supermemory is unavailable locally, so local match runs are labelled
+  fixtures from the real evaluator, not real memory-backed runs. Nothing was run against the hosted project except a
+  read-only check of the test technician's two records (both `indexed`).
+
+### Hosted database
+
+The import migration `20261118100000_job_import.sql` has **NOT** been applied to the hosted project
+(`opportunity_imports` answered 404 on 2026-11-15). Production runs `main` (77629ed) with the import flag off.
+
+### WARNING: local configuration touches hosted data
+
+The private `.env.local` used for development points at the hosted Supabase project `ighnwgkqvajfkhmopttg`, which
+also serves production. Anything done in a local app with it (sign-in, matching, edits, imports) reads and writes
+hosted data. Use only the fictional test technician ("Inbox A Test (fictional)"). Keep EMAIL_MODE=off,
+SIGNOFF_ENABLED=false, SUPERVISOR_REVIEW_ENABLED=false, OPPORTUNITY_IMPORT_ENABLED=false unless an approved step says
+otherwise. Never run `supabase config push`, `supabase db push`, deploys or Vercel env changes without approval.
+
+### Preserve the demo baseline
+
+Do not sign in as, edit, re-match or delete **Alex Morgan, Jordan Rivera or Sam Okafor**. Sam (rehearsal-2) is reserved
+at the 2-of-4 baseline. Use separate fictional test identities. Do not delete test accounts, test records, partner
+records or backups without approval. Never reset Git history or roll back the database automatically.
+
+### Environment variable names (values only in the private file, never in Git)
+
+Hosted-dev work: `NEXT_PUBLIC_DATA_MODE`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`,
+`SUPABASE_SECRET_KEY`, `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_FALLBACK_MODELS`, `SUPERMEMORY_API_KEY`,
+`SUPERMEMORY_NAMESPACE_PREFIX`, `DEMO_USER_EMAIL`, `DEMO_USER_PASSWORD`, `EMAIL_MODE`, `SIGNOFF_ENABLED`,
+`SUPERVISOR_REVIEW_ENABLED`, `SIGNUP_MODE`, `APP_BASE_URL`, `SIGNOFF_PEPPER`, `OPPORTUNITY_IMPORT_ENABLED`,
+`TINYFISH_MODE`, `IMPORT_DAILY_LIMIT`, `TINYFISH_API_KEY`.
+Not available on the original laptop (not invented): `SIGNOFF_PEPPER` (only needed for sign-up, password reset and
+onboarding) and `TINYFISH_API_KEY` (the user adds it to `.env.local` when the live test is approved).
+Resend variables are deliberately omitted locally (email off).
+
+### Fresh-laptop setup
+
+Needs Node 24, Git, GitHub CLI (`gh auth login`), Docker (only for the isolated local stack).
+
+    git clone https://github.com/tharunvimalaa/sun-hacks-26.git
+    cd sun-hacks-26
+    git checkout feature/job-import
+    npm ci
+    # place the privately transferred .env.local at the repo root, then:
+    chmod 600 .env.local
+    npm test && npm run typecheck && npm run lint
+
+Run against hosted dev data (see WARNING): `npm run dev` → http://localhost:3000.
+
+Isolated local stack (no hosted data, no providers):
+
+    npx supabase start                         # Docker; API 54321, DB 54322
+    npx supabase status -o env                 # local-only keys for the variables below
+    # In a shell WITHOUT the hosted .env.local values exported:
+    export NEXT_PUBLIC_DATA_MODE=live NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<local publishable key> SUPABASE_SECRET_KEY=<local secret key> \
+      APP_BASE_URL=http://localhost:3100 SIGNOFF_PEPPER=<any local 32+ char value> SIGNUP_MODE=closed \
+      SIGNOFF_ENABLED=false SUPERVISOR_REVIEW_ENABLED=false EMAIL_MODE=off \
+      OPPORTUNITY_IMPORT_ENABLED=true TINYFISH_MODE=stub GEMINI_API_KEY=local-stub-unused
+    # Next reads .env.local too; move it aside (or use a separate clone) so hosted values cannot leak in.
+    npm run build && npx next start -p 3100 &
+    E2E_STATE=$PWD/../e2e-import-state.json npx tsx scripts/e2e-import.mts
+    # restart the app with OPPORTUNITY_IMPORT_ENABLED=false, then:
+    E2E_STATE=$PWD/../e2e-import-state.json npx tsx scripts/e2e-import.mts flag-off
+    TEST_DATABASE_ADMIN_URL=postgres://postgres:postgres@127.0.0.1:54322/postgres npx vitest run tests/db
+    npx supabase stop
+
+### Pending approvals and exact next actions
+
+1. Build "Your next steps" (above) on `feature/job-import`; unit tests + e2e on the isolated stack; push; update
+   PR #11; report its checks separately from the live test. Keep PR #11 unmerged.
+2. **Needs approval:** user supplies one public HVAC listing URL and adds `TINYFISH_API_KEY` to `.env.local` themselves.
+3. **Needs approval:** back up hosted DB to `~/qualitrail-backups/<ts>-pre-job-import/` (outside Git), apply
+   `20261118100000_job_import.sql` in one transaction, verify schema. Rollback while unused:
+   `scripts/sql/rollback-job-import-if-empty.sql`.
+4. **Needs approval:** live test from a local app against hosted dev as the test technician (import flag on locally
+   only, email/sign-off/review off). Caps: TinyFish 1 fetch (max 2); Gemini ≤3 attempts per draft, ≤6 total;
+   Supermemory searches only, ≤2 match runs, no writes. Expected writes: 1 import row, 1 job, N requirements,
+   1–2 match runs, rate-limit rows; no emails, no evidence changes, no cleanup. Verify wording, priorities, honest
+   `cannot_assess` lines (do not broaden the catalog), evidence links, printable report.
+5. **Each needs separate approval:** Vercel variables with the flag off → merge PR #11 → deploy → enable the flag.
+
 A technician pastes a public job-listing link (or the listing text). QualiTrail retrieves that one page, drafts the
 requirement lines, lets the technician review them, then compares them with the technician's own saved records
 and shows a fit summary and report.
