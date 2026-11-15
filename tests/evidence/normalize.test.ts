@@ -69,3 +69,28 @@ describe("hashing and PDF sniffing", () => {
     expect(looksLikePdf(new Uint8Array([]))).toBe(false);
   });
 });
+
+describe("credential numbers versus record IDs", () => {
+  const withNumber = (type: string, credentialNumber: string | null) => ({ ...base, type, structuredData: { ...base.structuredData, credentialNumber } });
+
+  it("drops a record or work-order ID returned as a credential number for work records, checklists and notes", () => {
+    for (const type of ["work_record", "checklist", "experience_note"]) {
+      expect(normalizeExtraction(withNumber(type, "WO-20418"))!.structuredData.credentialNumber).toBeNull();
+    }
+  });
+
+  it("keeps a genuine certificate number on a certification or training record", () => {
+    expect(normalizeExtraction(withNumber("certification", "608-4471-U"))!.structuredData.credentialNumber).toBe("608-4471-U");
+    expect(normalizeExtraction(withNumber("training", "TR-9921"))!.structuredData.credentialNumber).toBe("TR-9921");
+  });
+
+  it("keeps a number when the type is unknown rather than guessing it away", () => {
+    expect(normalizeExtraction(withNumber("diploma", "A-77"))!.structuredData.credentialNumber).toBe("A-77");
+  });
+
+  it("for typed text, drops a credential number the source never shows", () => {
+    const r = normalizeExtraction(withNumber("certification", "608-0000"), "I hold an EPA 608 card.")!;
+    expect(r.structuredData.credentialNumber).toBeNull();
+    expect(r.uncertainFields).toContain("credentialNumber");
+  });
+});

@@ -10,6 +10,8 @@ export interface WorkerRow {
   name: string;
   trade: string;
   is_synthetic: boolean;
+  /** Not selected by WORKER_COLUMNS: read separately so sign-in never depends on the optional column. */
+  summary?: string | null;
 }
 
 export interface EvidenceRow {
@@ -42,6 +44,7 @@ export function toWorker(row: WorkerRow): Worker {
     id: row.id,
     name: row.name,
     trade: row.trade,
+    summary: row.summary ?? null,
     isSynthetic: row.is_synthetic,
   });
 }

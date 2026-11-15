@@ -12,6 +12,7 @@
  * Retrieval similarity can make a record a *supporting* candidate, but never
  * a *direct* one: direct needs an accepted type AND content checks below.
  */
+import { contributionText, relationshipText, termsClause } from "./explain";
 import type {
   Evidence,
   EvidenceAssessment,
@@ -66,6 +67,12 @@ function recordText(e: Evidence): string {
   return norm(
     [e.title, e.issuer ?? "", d.summary ?? "", ...d.skills, ...d.activities, ...d.equipment].join(" \n "),
   );
+}
+
+/** The requirement keywords the record itself states (title, skills, activities, summary, issuer, equipment). */
+export function matchedTerms(req: Requirement, e: Evidence): string[] {
+  const text = recordText(e);
+  return req.criteria.keywords.filter((k) => hasKeyword(text, k));
 }
 
 /* ------------------------------------------------------------------ */
@@ -213,6 +220,7 @@ function connection(
     evidenceTitle: e.title,
     evidenceDate: e.date,
     evidenceType: e.type,
+    evidenceIssuer: e.issuer,
     verificationStatus: e.verificationStatus,
     role,
     contribution: clip(contribution, 500),
@@ -244,10 +252,12 @@ export function evaluateRequirement(req: Requirement, candidates: Candidate[], t
   let sawIncomplete = false;
   let sawWrongScope = false;
   let sawExpired = false;
+  const related: { e: Evidence; terms: string[]; direct: boolean }[] = [];
 
   for (const c of dedupe(candidates)) {
     const v = classify(req, c, today);
     const e = c.evidence;
+    const terms = matchedTerms(req, e);
     switch (v.kind) {
       case "drop":
         break;
@@ -258,28 +268,33 @@ export function evaluateRequirement(req: Requirement, candidates: Candidate[], t
       case "wrong_scope":
         sawWrongScope = true;
         uncertainties.push(clip(`"${e.title}": ${v.reason}`, 500));
-        supporting.push(connection(c, "supporting", "Related credential of a different type.", v.reason));
+        supporting.push(connection(c, "supporting", `${contributionText(e, terms, "supporting")}`, `${v.reason} ${termsClause(terms)}`));
+        related.push({ e, terms, direct: false });
         break;
       case "supporting":
-        supporting.push(connection(c, "supporting", "Related evidence that supports but does not satisfy the requirement.", v.why));
+        supporting.push(connection(c, "supporting", contributionText(e, terms, "supporting"), `${v.why} ${termsClause(terms)}`));
+        related.push({ e, terms, direct: false });
         break;
       case "incomplete": {
         sawIncomplete = true;
         if (v.ambiguous) {
           uncertainties.push(clip(`"${e.title}": ${v.ambiguous} Please confirm it covers the requirement.`, 500));
-          incomplete.push(connection(c, "direct", "Right kind of record that may cover the requirement; needs a person to confirm.", v.ambiguous));
+          incomplete.push(connection(c, "direct", contributionText(e, terms, "incomplete"), `${v.ambiguous} ${termsClause(terms)}`));
+          related.push({ e, terms, direct: true });
           break;
         }
         const what = v.missing.join(", ");
         missingDocumentation.push(clip(`"${e.title}" does not state ${what}.`, 500));
         incomplete.push(
-          connection(c, "direct", "Right kind of record, but key details are missing.", `It is the type of record the requirement asks for, but it lacks ${what}.`),
+          connection(c, "direct", contributionText(e, terms, "incomplete"), `It is the type of record the requirement asks for, but it does not state ${what}. ${termsClause(terms)}`),
         );
+        related.push({ e, terms, direct: true });
         break;
       }
       case "direct": {
-        const conn = connection(c, "direct", "Record of the type the requirement asks for, whose content matches it.", "Its type, content and required details match the requirement.");
+        const conn = connection(c, "direct", contributionText(e, terms, "direct"), `Its type, stated content and required details match the requirement. ${termsClause(terms)}`);
         direct.push(conn);
+        related.push({ e, terms, direct: true });
         if (DOCUMENTED.has(e.verificationStatus)) directDocumented.push(conn);
         break;
       }
@@ -318,6 +333,9 @@ export function evaluateRequirement(req: Requirement, candidates: Candidate[], t
       : "No sufficient documentation was found for this requirement.";
     missingDocumentation.push(`A record that directly documents: ${clip(req.originalText, 200)}`);
   }
+
+  const relationship = relationshipText(related);
+  if (relationship) explanation = `${explanation} ${relationship}`;
 
   // Never double count: a record is linked once, as direct or supporting.
   const connections = [...direct.sort(bySimilarityThenDate), ...incomplete.sort(bySimilarityThenDate), ...supporting.sort(bySimilarityThenDate)];

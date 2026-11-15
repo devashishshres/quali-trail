@@ -32,7 +32,7 @@ const SEEDED_AT = "2026-11-14T17:00:00.000+00:00";
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const now = () => new Date().toISOString();
 
-const worker = { id: DEMO_WORKER.id, name: DEMO_WORKER.name, trade: DEMO_WORKER.trade, isSynthetic: true };
+const worker = { id: DEMO_WORKER.id, name: DEMO_WORKER.name, trade: DEMO_WORKER.trade, summary: "Fictional demo technician (sample data): residential heat-pump installation and startup, with EPA 608 certification.", isSynthetic: true };
 
 const opportunity: Opportunity = {
   ...DEMO_OPPORTUNITY,
@@ -81,6 +81,7 @@ function link(
     evidenceTitle: e.title,
     evidenceDate: e.date,
     evidenceType: e.type,
+    evidenceIssuer: e.issuer,
     verificationStatus: e.verificationStatus,
     role,
     contribution,

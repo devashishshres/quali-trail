@@ -14,7 +14,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Supermemory } from "supermemory";
 import { memoryContent, memoryDate, memoryDocId, memoryMetadata, memoryNamespace } from "../../lib/server/memory/conventions";
 import { EVIDENCE_COLUMNS, toEvidence, type EvidenceRow } from "../../lib/supabase/mappers";
-import { DEMO_WORKER } from "./demo-data";
+import { planDemoWorker } from "./synthetic-worker";
 
 const need = (n: string) => {
   const v = process.env[n];
@@ -24,16 +24,18 @@ const need = (n: string) => {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function main() {
+  // DEMO_WORKER_SLUG (+ DEMO_WORKER_NAME) selects a synthetic rehearsal worker; default is the original demo worker.
+  const plan = planDemoWorker({ slug: process.env.DEMO_WORKER_SLUG, name: process.env.DEMO_WORKER_NAME });
   const db = createClient(need("NEXT_PUBLIC_SUPABASE_URL"), need("SUPABASE_SECRET_KEY"), { auth: { persistSession: false, autoRefreshToken: false } });
   const memory = new Supermemory({ apiKey: need("SUPERMEMORY_API_KEY") });
-  const ns = memoryNamespace(DEMO_WORKER.id);
+  const ns = memoryNamespace(plan.worker.id);
 
-  const { data, error } = await db.from("evidence").select(EVIDENCE_COLUMNS).eq("worker_id", DEMO_WORKER.id).returns<EvidenceRow[]>();
+  const { data, error } = await db.from("evidence").select(EVIDENCE_COLUMNS).eq("worker_id", plan.worker.id).returns<EvidenceRow[]>();
   if (error) throw error;
   if (!data.length) throw new Error("No demo evidence found. Run the seed first.");
 
   const mark = (id: string, version: number, status: string, err: string | null) =>
-    db.from("evidence").update({ index_status: status, index_error: err, memory_document_id: memoryDocId(id, version) }).eq("id", id).eq("worker_id", DEMO_WORKER.id).eq("version", version);
+    db.from("evidence").update({ index_status: status, index_error: err, memory_document_id: memoryDocId(id, version) }).eq("id", id).eq("worker_id", plan.worker.id).eq("version", version);
 
   for (const row of data) {
     const e = toEvidence(row);

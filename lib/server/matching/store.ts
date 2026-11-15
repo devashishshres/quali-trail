@@ -78,6 +78,7 @@ export async function readRun(user: SupabaseClient, workerId: string, runId: str
           evidenceTitle: e.title,
           evidenceDate: e.date,
           evidenceType: e.type,
+          evidenceIssuer: e.issuer,
           verificationStatus: e.verificationStatus,
           role: m.role,
           contribution: m.contribution,

@@ -1,5 +1,6 @@
 import { getAuthedContext } from "@/lib/api/auth";
 import { apiError, ok } from "@/lib/api/responses";
+import { readWorkerSummary } from "@/lib/server/profile";
 import { reconcileIndexing } from "@/lib/server/memory/indexing";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { EVIDENCE_COLUMNS, toEvidence, toWorker, type EvidenceRow } from "@/lib/supabase/mappers";
@@ -37,7 +38,7 @@ export async function GET() {
   }
 
   const body: ListEvidenceResponse = {
-    worker: toWorker(ctx.worker),
+    worker: toWorker({ ...ctx.worker, summary: await readWorkerSummary(ctx.supabase, ctx.worker.id) }),
     evidence: rows.map(toEvidence),
   };
   return ok(body);

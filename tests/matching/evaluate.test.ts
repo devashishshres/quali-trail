@@ -266,3 +266,68 @@ describe("duplicates", () => {
     expect(r.missingDocumentation).toHaveLength(1);
   });
 });
+
+describe("source-grounded explanations", () => {
+  const after = () => run(R4, [cand(checklist(), 0.9), cand(E2, 0.71), cand(E4, 0.64)]);
+
+  it("each connection reports its own issuer as stored", () => {
+    const r = run(R1, [cand(E3, 0.88)]);
+    expect(r.connections[0].evidenceIssuer).toBe(E3.issuer);
+    expect(run(R1, [cand(ev({ issuer: null }), 0.8)]).connections[0].evidenceIssuer).toBeNull();
+  });
+
+  it("contribution states what the record itself says, who issued it, when, and how it was supplied", () => {
+    const c = run(R1, [cand(E3, 0.88)]).connections[0];
+    expect(c.contribution).toContain(E3.issuer!);
+    expect(c.contribution).toContain(`dated ${E3.date}`);
+    expect(c.contribution).toContain("not independently confirmed");
+    expect(c.contribution).toContain(`"${E3.title}"`);
+    expect(c.contribution).toMatch(/It states: /);
+  });
+
+  it("a self-reported record says there is no document", () => {
+    const c = run(R3, [cand(E2, 0.9)]).connections[0];
+    expect(c.contribution).toContain("Self-reported with no document");
+  });
+
+  it("omits issuer and date wording when the record has none, instead of inventing it", () => {
+    const c = run(R1, [cand(ev({ issuer: null, date: null, title: "EPA 608 Universal card", data: { skills: ["EPA Section 608 Universal"] } }), 0.8)]).connections[0];
+    expect(c.contribution).not.toMatch(/ from |dated/);
+  });
+
+  it("explains how records relate without claiming independence or the same job", () => {
+    const r = after();
+    expect(r.connections.length).toBeGreaterThanOrEqual(2);
+    expect(r.explanation).toContain("Records considered together");
+    expect(r.explanation).toContain("does not show they describe the same job or were reviewed independently");
+    expect(r.explanation).not.toMatch(/independent source|corroborat|confirms each other|multiple sources agree/i);
+  });
+
+  it("different issuers do not change the wording to imply independent sources", () => {
+    const a = run(R4, [cand(checklist({ issuer: "Alpha Co" }), 0.9), cand(E2, 0.7)]);
+    const b = run(R4, [cand(checklist({ issuer: "Alpha Co" }), 0.9), cand(ev({ ...E2, issuer: "Alpha Co" } as never), 0.7)]);
+    for (const r of [a, b]) expect(r.explanation).not.toMatch(/independent source|different (?:issuers|sources)/i);
+  });
+
+  it("connection text is specific to each record: no identical paragraph repeated across connections", () => {
+    const r = after();
+    const contributions = r.connections.map((c) => c.contribution);
+    expect(new Set(contributions).size).toBe(contributions.length);
+  });
+
+  it("unmet criteria appear once at requirement level, not repeated on every connection", () => {
+    const r = run(R4, [cand(E2, 0.71), cand(E4, 0.64)]);
+    expect(r.assessment).toBe("no_sufficient_evidence");
+    expect(r.missingDocumentation.length).toBeGreaterThan(0);
+    for (const c of r.connections) for (const m of r.missingDocumentation) expect(`${c.contribution} ${c.relevanceExplanation}`).not.toContain(m);
+  });
+
+  it("records found only by memory search say their relevance is unconfirmed", () => {
+    const r = run(R3, [cand(ev({ type: "training", title: "Unrelated safety course", data: { skills: ["ladder safety"] } }), 0.9)]);
+    for (const c of r.connections) expect(c.relevanceExplanation).toMatch(/shares no requirement terms|Shares these requirement terms/);
+  });
+
+  it("every explained result still satisfies the contract and length limits", () => {
+    for (const r of [after(), run(R1, [cand(E3, 0.88)])]) expect(RequirementResult.safeParse(r).success).toBe(true);
+  });
+});

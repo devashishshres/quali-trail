@@ -150,6 +150,11 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
             <h3 className="text-sm font-semibold text-slate">Technician</h3>
             <p className="font-display text-2xl font-semibold">{worker.name}</p>
             <p>{worker.trade}</p>
+            {worker.summary && (
+              <p className="mt-1 max-w-prose text-sm text-slate">
+                {worker.summary} <span className="text-xs">(Technician&apos;s own summary; not verified.)</span>
+              </p>
+            )}
           </section>
           <section>
             <h3 className="text-sm font-semibold text-slate">Opportunity</h3>
@@ -183,6 +188,7 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
                   <th className="py-2 pr-4 font-semibold">Requirement</th>
                   <th className="py-2 pr-4 font-semibold">Assessment</th>
                   <th className="py-2 pr-4 font-semibold">Supporting record</th>
+                  <th className="py-2 pr-4 font-semibold">Issuer</th>
                   <th className="py-2 font-semibold">Verification</th>
                 </tr>
               </thead>
@@ -217,6 +223,7 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
                               <span className="text-slate">No matching record</span>
                             )}
                           </td>
+                          <td className="py-3 pr-4 text-slate">{c ? (c.evidenceIssuer ?? "Not stated") : ""}</td>
                           <td className="py-3">{c && <VerificationTag status={c.verificationStatus} />}</td>
                         </tr>
                       ))}
@@ -253,7 +260,9 @@ function Packet({ worker, opportunity }: { worker: Worker; opportunity: Opportun
           <section className="break-inside-avoid">
             <h3 className="font-display text-xl font-semibold">Uncertainty</h3>
             <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate">
-              {run.results.flatMap((r) => r.uncertainties.map((u) => <li key={`${r.requirementId}${u}`}>{u}</li>))}
+              {[...new Set(run.results.flatMap((r) => r.uncertainties))].map((u) => (
+                <li key={u}>{u}</li>
+              ))}
             </ul>
           </section>
         </div>

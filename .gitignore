@@ -26,6 +26,8 @@ next-env.d.ts
 # Real keys live only in .env.local or in Vercel project settings.
 .env
 .env*
+# Exception: a names-only template with placeholder values, never real keys.
+!.env.example
 *.pem
 *.key
 *.p12
@@ -35,6 +37,8 @@ service-account*.json
 # All Markdown stays local: notes, planning docs, README, docs/,
 # AI-agent instruction files (context.md, AGENTS.md, CLAUDE.md, ...).
 *.md
+# Exception: the project README.
+!README.md
 *.mdx
 
 # ---------- AI / editor tooling ----------
