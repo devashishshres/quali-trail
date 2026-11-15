@@ -329,7 +329,34 @@ Nothing merged or deployed; features remain off. Do NOT run these steps again.
    - After real use: fix forward with a new migration. Never drop populated acknowledgment/review tables.
    - Full restore from the step 2 dump is a last resort and needs approval.
 
+   ADVISORS (npx supabase db advisors --remote, 2026-11-15, after the release migrations): 0 errors.
+   Documented, deliberately NOT changed (no permission changes outside a reviewed migration):
+   - WARN security, PRE-EXISTING (20261114170000/20261114210000, on main before this release):
+       function_search_path_mutable: set_updated_at, evidence_bump_version
+       anon/authenticated SECURITY DEFINER executable via /rest/v1/rpc: current_worker_id,
+         evidence_guard_verification, evidence_mark_matches_stale
+   - WARN security, Auth setting: leaked-password protection off (Dashboard -> Auth; needs separate approval).
+   - WARN performance: auth_rls_initplan on workers_select_own (pre-existing) and supervisor_profiles_select_own
+     (this release; table empty). Possible later forward fix: wrap auth.uid() as (select auth.uid()).
+   - INFO, expected: rls_enabled_no_policy on 13 release tables (intended: service role only, no client access);
+     unused_index on the empty release tables; unindexed_foreign_keys (11, pre-existing and release tables).
+
 5. MERGE  #6 -> #7 -> #8 -> #9, flags off. Production redeploys from main.
+   Merge check 2026-11-15: all four OPEN, MERGEABLE/CLEAN, no auto-merge, stack linear, each contains main
+   (c429082). Heads 146f9c6 / 10bc68e / 0ebb5a4: typecheck, lint, tests and production build pass at each.
+   Final head: 299 tests, e2e-local 95/95, e2e-degraded 16/16 (code identical since 78a6679).
+   Every merge INTO main deploys production (main's Vercel status). Stacked PRs: after #6 merges, #7's base is
+   still feature/customer-signoff; retarget it to main before merging (gh pr edit 7 --base main), same for #8, #9.
+   Before the first merge, production (Vercel -> Settings -> Environment Variables, Production scope) needs:
+     SIGNOFF_PEPPER         set, >= 32 random chars, Sensitive, NOT NEXT_PUBLIC_   (new; without it sign-up,
+                            password reset and onboarding answer "not available"; sign-in is unaffected)
+     SIGNOFF_ENABLED, SUPERVISOR_REVIEW_ENABLED   unset or "false"
+     EMAIL_MODE             unset or "off"   (never mock on Vercel)
+     SIGNUP_MODE            unset or "closed"
+     existing NEXT_PUBLIC_SUPABASE_URL / _PUBLISHABLE_KEY / SUPABASE_SECRET_KEY pointing at the project above
+     no NEXT_PUBLIC_ variable holding a secret
+   Password reset is NOT behind a flag: once SIGNOFF_PEPPER is set it sends Supabase Auth reset emails, and the
+   link only works after step 6's redirect URLs are configured.
 
 6. SUPABASE AUTH (Dashboard -> Authentication)
    - URL Configuration: Site URL https://<app>
