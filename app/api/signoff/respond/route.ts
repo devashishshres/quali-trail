@@ -1,5 +1,5 @@
-import { recordedStatementVersion } from "@/lib/server/signoff/statement";
-import { employerReviewEnabled } from "@/lib/server/employer/flags";
+import { STATEMENT_VERSION } from "@/lib/server/signoff/statement";
+import { CUSTOMER_SHARE_CONSENT_VERSION, employerReviewEnabled } from "@/lib/server/employer/flags";
 import { notifyCustomerDecision } from "@/lib/server/signoff/notify";
 import { logSignoffError } from "@/lib/server/signoff/redact";
 import { allow, clientIp, featureOn, gone, guarded, json, off, rpc, sessionHash, tokenHash, tooMany } from "@/lib/server/signoff/service";
@@ -28,7 +28,7 @@ async function handlePOST(request: Request) {
     p_decision: d.decision,
     p_typed_name: d.decision === "confirm" ? d.typedName : null,
     p_comment: d.decision === "request_correction" ? d.comment : null,
-    p_statement_version: recordedStatementVersion(d.decision === "confirm" ? d.statementVersion : undefined, employerReviewEnabled()),
+    p_statement_version: STATEMENT_VERSION,
   });
   if (r.ok) {
     if (r.repeated !== true) {
@@ -38,7 +38,14 @@ async function handlePOST(request: Request) {
         title: String(r.title), workerName: String(r.workerName), deliveryMode: String(r.deliveryMode),
       }).catch((e) => logSignoffError("receipt", e));
     }
-    return json({ recorded: true, repeated: r.repeated === true });
+    // Separate, optional permission for employer sharing: only if the customer ticked it, only for a confirmation,
+    // only by the same verified session, and only while the feature is on. Never inferred.
+    let shareConsent = false;
+    if (employerReviewEnabled() && d.decision === "confirm" && d.shareWithEmployers === true) {
+      const c = await rpc("signoff_record_share_consent", { p_token_hash: th, p_session_hash: sh, p_consent_version: CUSTOMER_SHARE_CONSENT_VERSION });
+      shareConsent = c.ok === true;
+    }
+    return json({ recorded: true, repeated: r.repeated === true, shareConsent });
   }
   const reason = String(r.reason);
   if (CLOSED[reason]) return json({ error: { code: "forbidden", message: CLOSED[reason], reason } }, 409);

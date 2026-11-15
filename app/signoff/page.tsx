@@ -85,7 +85,7 @@ export default function SignoffPage() {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
     return run(async () => {
-      if (mode === "confirm") await customerApi.respond(t(), { decision: "confirm", typedName: String(f.get("name") ?? ""), agreed: true, statementVersion: snap?.statementVersion });
+      if (mode === "confirm") await customerApi.respond(t(), { decision: "confirm", typedName: String(f.get("name") ?? ""), agreed: true, ...(snap?.shareConsent ? { shareWithEmployers: f.get("shareWithEmployers") === "yes" } : {}) });
       else if (mode === "request_correction") await customerApi.respond(t(), { decision: "request_correction", comment: String(f.get("comment") ?? "") });
       else await customerApi.respond(t(), { decision: "decline" });
       try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ }
@@ -169,6 +169,13 @@ export default function SignoffPage() {
                       <input name="name" className="field" autoComplete="name" minLength={2} maxLength={200} required />
                     </label>
                     <label className="flex gap-2 text-sm"><input type="checkbox" required /> I agree with the statement above.</label>
+                    {snap.shareConsent && (
+                      <fieldset className="space-y-1 rounded-md border border-line p-3 text-sm">
+                        <legend className="px-1 font-semibold">Optional: sharing with prospective employers</legend>
+                        <label className="flex gap-2"><input type="checkbox" name="shareWithEmployers" value="yes" /> {snap.shareConsent}</label>
+                        <p className="text-xs text-slate">Your acknowledgment is recorded either way. Leaving this unticked does not affect it.</p>
+                      </fieldset>
+                    )}
                   </>
                 )}
                 {mode === "request_correction" && (

@@ -72,14 +72,14 @@ export const SnapshotResponse = z.object({
     summary: z.string().nullable(),
   }),
   statement: z.string(),
-  /** Which wording was shown, echoed back on confirm so the stored version matches what the customer read. */
-  statementVersion: z.string().optional(),
+  /** Present only while employer sharing is on: the separate, optional permission question. */
+  shareConsent: z.string().optional(),
   response: z.object({ decision: SignoffDecision, createdAt: z.string() }).nullable(),
 });
 export type SnapshotResponse = z.infer<typeof SnapshotResponse>;
 
 export const RespondRequest = z.discriminatedUnion("decision", [
-  z.object({ decision: z.literal("confirm"), typedName: z.string().trim().min(2).max(200), agreed: z.literal(true), statementVersion: z.string().max(60).optional() }),
+  z.object({ decision: z.literal("confirm"), typedName: z.string().trim().min(2).max(200), agreed: z.literal(true), shareWithEmployers: z.boolean().optional() }),
   z.object({ decision: z.literal("request_correction"), comment: z.string().trim().min(1).max(1000) }),
   z.object({ decision: z.literal("decline") }),
 ]);

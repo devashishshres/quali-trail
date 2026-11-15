@@ -1,5 +1,5 @@
-import { customerStatement } from "@/lib/server/signoff/statement";
-import { employerReviewEnabled } from "@/lib/server/employer/flags";
+import { STATEMENT_TEXT } from "@/lib/server/signoff/statement";
+import { CUSTOMER_SHARE_CONSENT_TEXT, employerReviewEnabled } from "@/lib/server/employer/flags";
 import { allow, clientIp, featureOn, gone, guarded, json, off, rpc, sessionHash, tokenHash, tooMany } from "@/lib/server/signoff/service";
 import type { SnapshotResponse } from "@/lib/types";
 
@@ -12,7 +12,6 @@ async function handlePOST(request: Request) {
   const r = await rpc("signoff_read_snapshot", { p_token_hash: th, p_session_hash: sh });
   if (!r.ok) return gone();
   const s = r.snapshot as Record<string, unknown>;
-  const statement = customerStatement(employerReviewEnabled());
   const body: SnapshotResponse = {
     status: r.status as SnapshotResponse["status"],
     deliveryMode: r.deliveryMode as SnapshotResponse["deliveryMode"],
@@ -27,8 +26,8 @@ async function handlePOST(request: Request) {
       equipment: (s.equipment as string[]) ?? [],
       summary: (s.summary as string | null) ?? null,
     },
-    statement: statement.text,
-    statementVersion: statement.version,
+    statement: STATEMENT_TEXT,
+    ...(employerReviewEnabled() ? { shareConsent: CUSTOMER_SHARE_CONSENT_TEXT } : {}),
     response: (r.response as SnapshotResponse["response"]) ?? null,
   };
   return json(body);

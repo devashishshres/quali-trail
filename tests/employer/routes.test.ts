@@ -23,7 +23,9 @@ type Acct = { id: string; email: string; confirmed: boolean } | null;
 let current: Acct = null;
 let asWorker: { id: string; name: string; trade: string; is_synthetic: boolean } | null = null;
 
-vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }), headers: async () => new Headers() }));
+let signoffCookie: string | undefined;
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => (signoffCookie ? { value: signoffCookie } : undefined) }), headers: async () => new Headers() }));
+vi.mock("@/lib/server/signoff/notify", () => ({ notifyCustomerDecision: async () => undefined }));
 vi.mock("@/lib/api/auth", () => ({
   getAccount: async () => current && { supabase: null, user: { id: current.id, email: current.email, emailConfirmed: current.confirmed }, worker: null, supervisor: null },
   getAuthedContext: async () => asWorker && { supabase: null, authUserId: "x", worker: asWorker },
@@ -268,8 +270,65 @@ describe.skipIf(!ADMIN_URL)("employer sharing routes (local database)", () => {
     expect((await (await R.shares()).POST(req("/x", { method: "POST", body: { certificationIds: [certA], email, reviewed: true } }))).status).toBe(404);
     const { hasPendingEmployerShare } = await import("@/lib/server/employer/service");
     expect(await hasPendingEmployerShare(email)).toBe(false);
-    const { customerStatement } = await import("@/lib/server/signoff/statement");
-    expect(customerStatement(false).version).toBe("customer-ack-v1");
+  });
+
+  it("customer: the acknowledgment wording is unchanged; sharing is a separate, unticked permission recorded only when given", async () => {
+    process.env.SIGNOFF_ENABLED = "true";
+    const { hmac } = await import("@/lib/server/signoff/crypto");
+    const { STATEMENT_TEXT } = await import("@/lib/server/signoff/statement");
+    const { CUSTOMER_SHARE_CONSENT_TEXT } = await import("@/lib/server/employer/flags");
+    const snapshotRoute = (await import("@/app/api/signoff/snapshot/route")).POST;
+    const respondRoute = (await import("@/app/api/signoff/respond/route")).POST;
+    async function pending(title: string) {
+      const rec = await record("work_record", null, title);
+      const [id, sid, token, cookie] = [randomUUID(), randomUUID(), randomUUID().replace(/-/g, "") + "aaaa", randomUUID().replace(/-/g, "") + "bbbb"];
+      const v = (await db.query("select version from public.evidence where id=$1", [rec])).rows[0].version;
+      await db.query(`insert into public.signoff_requests (id, worker_id, evidence_id, evidence_version, snapshot, snapshot_hash, file_hash, customer_email, customer_name,
+          token_hash, status, delivery_mode, expires_at, verified_session_id, email_verified_at)
+        values ($1,$2,$3,$4,$5,$8,'x','casey@example.test','Casey Customer',$6,'pending','mock',now() + interval '7 days',$7,now())`,
+        [id, W.id, rec, v, JSON.stringify({ title, workerName: "Test Tech (fictional)", activities: ["Brazed line set"], skills: [], equipment: [] }), hmac("token", token), sid, sha(id)]);
+      await db.query("insert into public.signoff_sessions (id, request_id, session_hash, expires_at) values ($1,$2,$3,now() + interval '30 minutes')", [sid, id, hmac("session", cookie)]);
+      return { id, rec, token, cookie };
+    }
+    const confirm = async (x: { token: string; cookie: string }, extra: object) => {
+      signoffCookie = x.cookie;
+      return body(await respondRoute(req("/x", { method: "POST", token: x.token, body: { decision: "confirm", typedName: "Casey Typed", agreed: true, ...extra } })));
+    };
+    try {
+      const a = await pending("Customer job A (fictional)");
+      signoffCookie = a.cookie;
+      const snap = await body(await snapshotRoute(req("/x", { method: "POST", token: a.token })));
+      expect(snap.body.statement).toBe(STATEMENT_TEXT);
+      expect(snap.body.statement).not.toMatch(/employer/i);
+      expect(snap.body.shareConsent).toBe(CUSTOMER_SHARE_CONSENT_TEXT);
+      expect(CUSTOMER_SHARE_CONSENT_TEXT).toMatch(/^I give the technician permission to share this acknowledgment with prospective employers/);
+      expect(CUSTOMER_SHARE_CONSENT_TEXT).toMatch(/never my name, signature, comments or contact details/);
+      expect((await confirm(a, { shareWithEmployers: true })).body).toMatchObject({ recorded: true, shareConsent: true });
+
+      const b = await pending("Customer job B (fictional)");
+      expect((await confirm(b, {})).body).toMatchObject({ recorded: true, shareConsent: false });
+      const c = await pending("Customer job C (fictional)");
+      expect((await confirm(c, { shareWithEmployers: false })).body).toMatchObject({ recorded: true, shareConsent: false });
+
+      process.env.EMPLOYER_REVIEW_ENABLED = "false";
+      const d = await pending("Customer job D (fictional)");
+      signoffCookie = d.cookie;
+      expect((await body(await snapshotRoute(req("/x", { method: "POST", token: d.token })))).body.shareConsent).toBeUndefined();
+      expect((await confirm(d, { shareWithEmployers: true })).body).toMatchObject({ recorded: true, shareConsent: false });
+      process.env.EMPLOYER_REVIEW_ENABLED = "true";
+
+      const rows = (await db.query("select request_id from public.signoff_share_consents where request_id = any($1)", [[a.id, b.id, c.id, d.id]])).rows.map((r) => r.request_id);
+      expect(rows).toEqual([a.id]);
+      const versions = (await db.query("select distinct statement_version v from public.signoff_responses where request_id = any($1)", [[a.id, b.id, c.id, d.id]])).rows.map((r) => r.v);
+      expect(versions).toEqual(["customer-ack-v1"]);
+      const cands = await body(await (await R.candidates()).GET());
+      const work = Object.fromEntries(cands.body.work.map((w: { id: string; eligible: boolean; withheldCount: number }) => [w.id, [w.eligible, w.withheldCount]]));
+      expect(work[a.rec]).toEqual([true, 0]);
+      expect(work[b.rec]).toEqual([false, 1]);
+      expect(JSON.stringify(cands.body)).not.toMatch(/Casey/);
+    } finally {
+      signoffCookie = undefined;
+    }
   });
 
   it("an invited address may register but gets no technician or supervisor role", async () => {

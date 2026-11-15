@@ -47,7 +47,7 @@ private and are counted as "withheld" in the technician's picker, with an honest
   hash, shared record ids/kinds/versions/file hashes and per-certificate original flag, invited address until used, token
   hash, status, reviewer account, expiry), `employer_share_events` (append-only: invited, accepted, viewed,
   original_opened, revoked, expired; never tokens or URLs), `review_share_consents` (insert-only: share permission plus a
-  separate show-name flag). RLS on, all client privileges revoked; only service-role functions touch them, each checking
+  separate show-name flag) and `signoff_share_consents` (insert-only: a customer's separate permission). RLS on, all client privileges revoked; only service-role functions touch them, each checking
   the caller. Email-delivery checks are replaced by supersets adding the new kind and related type.
 - **Eligibility is decided in the database** (`employer_share_candidates`, `employer_share_create`): a work item needs a
   shareable confirmation for the record's current version; a certification must be type `certification`, uploaded, with a
@@ -58,16 +58,23 @@ private and are counted as "withheld" in the technician's picker, with an honest
   employers", and (enabled only after the first) "also show my name, organization and title". Recorded only by that
   reviewer, only for a confirmation, only within 15 minutes of deciding. Without the name permission the employer is
   told the supervisor allowed sharing but did not permit their name to be shown.
-- **Customer acknowledgments.** Customers are never named. Acknowledgments under statement `customer-ack-v2` (shown while
-  the flag is on, which tells the customer it may be shared without their name or contact details) are shareable; older
-  ones are withheld.
+- **Customer acknowledgments.** The acknowledgment wording is unchanged (`customer-ack-v1`). With the flag on, the
+  confirm form adds a separate, optional, unticked question: "I give the technician permission to share this
+  acknowledgment with prospective employers they choose. Employers would see the work description and that a customer
+  acknowledged it, but never my name, signature, comments or contact details. If I leave this unticked, my
+  acknowledgment is never shared outside QualiTrail." The acknowledgment is recorded either way. Permission is stored
+  only if ticked, only through the verified session that confirmed, within 15 minutes. Only acknowledgments with that
+  permission are shareable; all others (including every older one) are withheld and counted. Customers are never named.
 - **Access.** Accept requires the token and a signed-in account whose confirmed email equals the invited address; the
   technician's own account is refused. Opening creates no profile and no supervisor relationship. An address with a
   pending share may register an account but still cannot create a technician or supervisor profile under the sign-up
   policy. Every API call checks the share's recipient.
 - **Originals** (certificates only) open through a 60-second signed URL only if that original was explicitly shared in
-  this packet, the share is active, and the record is still the shared version and file. The URL is returned to the
-  caller only and never logged.
+  this packet, the share is active (not withdrawn or expired), the caller is the invited account, and the record is still
+  the shared version and file. The URL is returned to the caller only and never logged.
+  **Limit:** withdrawal, expiry or a change stop any *new* link from being issued immediately, but a signed URL already
+  issued is a bearer link to the storage file and keeps working until its own 60 seconds run out (a file already
+  downloaded is, of course, out of our control). Each issued link is recorded as `original_opened`.
 - **Changes after sharing** are shown as a notice; the packet itself never changes.
 - **Technician UI**: a "Share" page (sidebar, flag on only). Nothing is preselected. Per-certificate "also allow the
   original" box; a warning that original certificates may contain personal information appears when any is ticked.
@@ -77,17 +84,17 @@ private and are counted as "withheld" in the technician's picker, with an honest
 ## Verification done (isolated local only)
 
 - Unit, route and database tests: `tests/employer/*.test.ts`, `tests/db/employer.test.ts`, including attempts to request
-  unselected items, excluded record types, work originals and excluded fields through the API; full suite 681/681.
-- Browser journeys: `scripts/e2e-employer.mjs` 39/39 (flag on, mock email); existing `scripts/e2e-local.mjs` 95/95 with
+  unselected items, excluded record types, work originals and excluded fields through the API; full suite 685/685.
+- Browser journeys: `scripts/e2e-employer.mjs` 43/43 (flag on, mock email; includes the customer permission page); existing `scripts/e2e-local.mjs` 95/95 with
   the employer flag off.
 
 ## Calls made by the builder (please check)
 
-- A `customer-ack-v2` acknowledgment counts as permission to share without naming the customer (the statement says so).
+- Customer permission is a separate checkbox; the acknowledgment wording and version are not changed.
 - Share permission and name permission are separate; name requires share.
 - Only `certification` records count as certifications; training records are not shareable.
 - Technician name and trade are the only profile fields in the packet.
-- Supervisor permission can only be given at decision time, not later for older reviews.
+- Supervisor and customer permission can only be given at decision time, not later for older confirmations.
 - Masked address hints keep the domain (same as supervisor invitations).
 - Default expiry 7 days (choices 3/7/14/30); 10 shares/hour and 20/day per technician.
 

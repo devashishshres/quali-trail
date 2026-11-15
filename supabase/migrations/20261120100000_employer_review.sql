@@ -18,8 +18,9 @@
 --   * The reviewer never gets a path to worker tables: the packet is a copy made at share time.
 --
 -- Permission to share a supervisor's confirmation externally (and, separately, their name) is an insert-only record
--- made at decision time (review_share_consents). Customers permit external sharing, never naming, by agreeing to the
--- customer-ack-v2 statement. Older confirmations carry no such permission and are never shared.
+-- made at decision time (review_share_consents). A customer gives (or not) a separate, unticked permission next to their
+-- acknowledgment (signoff_share_consents); customers are never named. The acknowledgment wording itself is unchanged.
+-- Older confirmations carry no such permission and are never shared.
 
 create table public.employer_shares (
   id                    uuid primary key default gen_random_uuid(),
@@ -69,10 +70,21 @@ create table public.review_share_consents (
   created_at            timestamptz not null default now()
 );
 
+-- A customer's explicit, separate permission, asked next to (not inside) the acknowledgment and unticked by default:
+-- the technician may share this acknowledgment, without the customer's name or contact details, with prospective
+-- employers. Recorded only by the verified session that confirmed. Without a row the acknowledgment is never shared.
+create table public.signoff_share_consents (
+  request_id      uuid primary key references public.signoff_requests (id) on delete restrict,
+  session_id      uuid not null,
+  consent_version text not null check (char_length(consent_version) <= 60),
+  created_at      timestamptz not null default now()
+);
+
 alter table public.employer_shares       enable row level security;
 alter table public.employer_share_events enable row level security;
 alter table public.review_share_consents enable row level security;
-revoke all on public.employer_shares, public.employer_share_events, public.review_share_consents from public, anon, authenticated;
+alter table public.signoff_share_consents enable row level security;
+revoke all on public.employer_shares, public.employer_share_events, public.review_share_consents, public.signoff_share_consents from public, anon, authenticated;
 revoke all on sequence public.employer_share_events_id_seq from public, anon, authenticated;
 
 -- ------------------------------------------------------------------
@@ -110,6 +122,8 @@ $$;
 create trigger employer_share_events_append_only before update or delete on public.employer_share_events
   for each row execute function public.employer_append_only();
 create trigger review_share_consents_append_only before update or delete on public.review_share_consents
+  for each row execute function public.employer_append_only();
+create trigger signoff_share_consents_append_only before update or delete on public.signoff_share_consents
   for each row execute function public.employer_append_only();
 
 -- ------------------------------------------------------------------
@@ -150,8 +164,8 @@ language sql stable security definer set search_path = '' as $$
      and q.evidence_version = e.version;
 $$;
 
--- Customer acknowledgments of the record's current version given under the statement that permits external sharing
--- (customer-ack-v2). Never the customer's name, address, typed signature or comment.
+-- Customer acknowledgments of the record's current version whose customer separately gave permission to share them
+-- with prospective employers. Never the customer's name, address, typed signature or comment.
 create or replace function public.employer_shareable_customer(p_worker uuid)
 returns table (evidence_id uuid, request_id uuid, decided_at timestamptz, simulated boolean, acknowledged_activities jsonb)
 language sql stable security definer set search_path = '' as $$
@@ -160,7 +174,8 @@ language sql stable security definer set search_path = '' as $$
     join public.signoff_responses r on r.request_id = s.id
     join public.evidence e on e.id = s.evidence_id and e.worker_id = s.worker_id
    where s.worker_id = p_worker and s.status = 'acknowledged' and r.decision = 'confirm'
-     and r.statement_version = 'customer-ack-v2' and s.evidence_version = e.version;
+     and s.evidence_version = e.version
+     and exists (select 1 from public.signoff_share_consents k where k.request_id = s.id);
 $$;
 
 -- Everything the technician may choose from, plus honest counts of confirmations that cannot be shared.
@@ -193,7 +208,8 @@ begin
                      and not exists (select 1 from public.review_share_consents k where k.request_id = q.id))
                + (select count(*) from public.signoff_requests s join public.signoff_responses r on r.request_id = s.id
                    where s.evidence_id = e.id and s.evidence_version = e.version and s.status = 'acknowledged'
-                     and r.statement_version is distinct from 'customer-ack-v2'))
+                     and r.decision = 'confirm'
+                     and not exists (select 1 from public.signoff_share_consents k where k.request_id = s.id)))
              order by e.source_date desc nulls last, e.created_at desc)
         from public.evidence e
        where e.worker_id = p_worker and e.type in ('work_record','checklist')), '[]'::jsonb),
@@ -472,6 +488,26 @@ begin
 end;
 $$;
 
+-- Record a customer's explicit permission: only through the verified session that recorded the confirmation, only for
+-- a confirmation, and only within 15 minutes of it. Never retroactive for older acknowledgments.
+create or replace function public.signoff_record_share_consent(p_token_hash text, p_session_hash text, p_consent_version text)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare q public.signoff_requests%rowtype; resp public.signoff_responses%rowtype; sid uuid;
+begin
+  select * into q from public.signoff_requests where token_hash = p_token_hash;
+  if not found then return jsonb_build_object('ok', false, 'reason', 'not_found'); end if;
+  select s.id into sid from public.signoff_sessions s
+   where s.request_id = q.id and s.session_hash = p_session_hash and s.revoked_at is null and s.expires_at > now();
+  select * into resp from public.signoff_responses where request_id = q.id;
+  if sid is null or not found or resp.session_id is distinct from sid then return jsonb_build_object('ok', false, 'reason', 'not_found'); end if;
+  if resp.decision <> 'confirm' then return jsonb_build_object('ok', false, 'reason', 'not_confirmation'); end if;
+  if exists (select 1 from public.signoff_share_consents where request_id = q.id) then return jsonb_build_object('ok', true, 'repeated', true); end if;
+  if resp.created_at < now() - interval '15 minutes' then return jsonb_build_object('ok', false, 'reason', 'too_late'); end if;
+  insert into public.signoff_share_consents (request_id, session_id, consent_version) values (q.id, sid, p_consent_version);
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
 do $$
 declare f text;
 begin
@@ -482,7 +518,7 @@ begin
                                 'employer_share_peek','employer_share_accept','employer_share_list_for_reviewer',
                                 'employer_share_changed','employer_share_get','employer_share_document_path',
                                 'employer_share_list_for_worker','employer_share_worker_get','employer_share_revoke',
-                                'review_record_share_consent')
+                                'review_record_share_consent','signoff_record_share_consent')
   loop
     execute format('revoke all on function %s from public, anon, authenticated', f);
     execute format('grant execute on function %s to service_role', f);

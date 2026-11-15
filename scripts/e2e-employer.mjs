@@ -93,7 +93,7 @@ try {
   const tech = must(await admin.auth.admin.createUser({ email: techEmail, password: pw, email_confirm: true }), "tech user").user;
   const worker = must(await admin.from("workers").insert({ auth_user_id: tech.id, name: `Tess Tech ${run} (fictional)`, trade: "HVAC", is_synthetic: true }).select("id").single(), "worker");
   const pdf = readFileSync(process.env.E2E_FICTIONAL_PDF ?? join(APP_DIR, "..", "fictional-test-record.pdf"));
-  const [recA, recB, recC, cert, cert2, train] = [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+  const [recA, recB, recC, recD, cert, cert2, train] = [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()];
   for (const id of [recA, cert, cert2, train]) must(await admin.storage.from("evidence").upload(`${tech.id}/${id}.pdf`, pdf, { contentType: "application/pdf" }), "upload");
   const base = { worker_id: worker.id, source_date: "2026-11-02", issuer: "Fictional Mechanical", verification_status: "self_reported", index_status: "failed", index_error: "Fixture: not indexed (no memory provider locally)" };
   const file = (id) => ({ source_kind: "pdf_upload", storage_path: `${tech.id}/${id}.pdf`, mime_type: "application/pdf", file_hash: sha(`${id}-${pdf.length}`) });
@@ -104,6 +104,8 @@ try {
       structured_data: { activities: ["Checked heat exchanger"], equipment: ["80k BTU furnace"], skills: [] } },
     { ...base, id: recC, type: "work_record", title: `Older private job ${run}`, source_kind: "manual_text", storage_path: null, file_hash: sha(recC),
       structured_data: { activities: ["Replaced capacitor"], equipment: [], skills: [] } },
+    { ...base, id: recD, type: "work_record", title: `Duct repair ${run}`, source_kind: "manual_text", storage_path: null, file_hash: sha(recD),
+      structured_data: { activities: ["Sealed return duct"], equipment: [], skills: [] } },
     { ...base, ...file(cert), id: cert, type: "certification", title: `EPA 608 Universal ${run}`, issuer: "Fictional Institute", verification_status: "document_supplied",
       structured_data: { credentialNumber: `CRED-${run}-SECRET`, holder: "Tess Tech, born 1990-01-01" } },
     { ...base, ...file(cert2), id: cert2, type: "certification", title: `NATE Heat Pump ${run}`, issuer: "Fictional Board", verification_status: "document_supplied", structured_data: {} },
@@ -151,16 +153,59 @@ try {
   const reviewerEmail = `hiring.${run}@employer.example`; // NOT on the local sign-up allowlist
   const W = await persona("technician");
   await signIn(W, techEmail, pw, "/passport");
+
+  /* ------------------------------------------------------------ customer: acknowledgment unchanged; sharing is a separate question */
+  const customerEmail = `casey.${run}@example.test`;
+  await W.goto(`${APP}/evidence`, { waitUntil: "networkidle0" });
+  await W.evaluate((t) => { const s = [...document.querySelectorAll("summary")].find((x) => x.innerText.includes(t)); s.closest("details").open = true; s.scrollIntoView(); }, `Duct repair ${run}`);
+  await sleep(800);
+  await W.waitForSelector("details[open] section[aria-label='Customer sign-off'] input[name=email]");
+  await W.type("details[open] section[aria-label='Customer sign-off'] input[name=email]", customerEmail);
+  await W.$eval("details[open] section[aria-label='Customer sign-off'] input[name=agreed]", (el) => el.click()); // the fixed bottom nav covers it
+  await W.evaluate(() => [...document.querySelectorAll("details[open] button")].find((b) => b.textContent.trim() === "Send request").click());
+  await W.waitForFunction(() => document.body.innerText.includes("Awaiting customer"));
+  const cInvite = await waitFor(async () => outbox("customer_invitation", customerEmail));
+  const C = await persona("customer");
+  await C.goto(cInvite.text.match(/https?:\/\/\S+#t=[A-Za-z0-9_-]+/)[0], { waitUntil: "networkidle0" });
+  await clickText(C, "Email me a code");
+  await C.waitForSelector("input[name=code]");
+  const cCode = (await waitFor(async () => outbox("customer_code", customerEmail)))?.text.match(/Code: (\d{6})/)?.[1];
+  await C.type("input[name=code]", cCode);
+  await clickText(C, "Continue");
+  await C.waitForFunction(() => document.body.innerText.includes("Sealed return duct"));
+  await clickText(C, "Acknowledge");
+  await C.waitForSelector("input[name=name]");
+  const custForm = await C.evaluate(() => {
+    const form = document.querySelector("form");
+    const share = form.querySelector("input[name=shareWithEmployers]");
+    return { text: form.innerText, hasShare: !!share, shareChecked: share?.checked, shareRequired: share?.required, boxes: form.querySelectorAll("input[type=checkbox]").length };
+  });
+  check("customer acknowledgment wording does not mention employers", !/employer/i.test(custForm.text.split("Optional: sharing")[0]));
+  check("customer is asked separately, unticked and optional, for permission to share with prospective employers",
+    custForm.hasShare && custForm.shareChecked === false && custForm.shareRequired === false && custForm.boxes === 2
+    && custForm.text.includes("I give the technician permission to share this acknowledgment with prospective employers"));
+  await C.type("input[name=name]", "Casey Customer");
+  await C.click("form input[type=checkbox]:not([name])");
+  await C.click("input[name=shareWithEmployers]");
+  await shot(C, "e00-customer-permission");
+  await clickText(C, "Submit");
+  await C.waitForFunction(() => document.body.innerText.includes("Thank you"));
+  const { data: custReq } = await admin.from("signoff_requests").select("id").eq("evidence_id", recD).single();
+  const { data: custConsent } = await admin.from("signoff_share_consents").select("request_id").eq("request_id", custReq.id);
+  const { data: custResp } = await admin.from("signoff_responses").select("statement_version").eq("request_id", custReq.id).single();
+  check("customer permission recorded separately; acknowledgment version unchanged", custConsent.length === 1 && custResp.statement_version === "customer-ack-v1");
+
   await W.goto(`${APP}/share`, { waitUntil: "networkidle0" });
   await W.waitForFunction(() => document.body.innerText.includes("Uploaded certifications"));
   const picker = await text(W);
-  check("picker lists the two shareable jobs and both certificates, nothing preselected",
-    picker.includes(`Heat-pump install ${run}`) && picker.includes(`Furnace tune-up ${run}`) && picker.includes(`EPA 608 Universal ${run}`) && picker.includes(`NATE Heat Pump ${run}`)
+  check("picker lists the three shareable jobs and both certificates, nothing preselected",
+    picker.includes(`Duct repair ${run}`) && picker.includes(`Heat-pump install ${run}`) && picker.includes(`Furnace tune-up ${run}`) && picker.includes(`EPA 608 Universal ${run}`) && picker.includes(`NATE Heat Pump ${run}`)
     && (await W.$$eval("input[type=checkbox]:checked", (x) => x.length)) === 0);
   check("unpermitted job and training record are not offered; the reason is explained",
     !picker.includes(`Older private job ${run}`) && !picker.includes(`Training course ${run}`) && picker.includes("without permission to share outside QualiTrail"), process.env.E2E_DEBUG ? picker.slice(0, 1500) : "");
   await tickLabel(W, `Heat-pump install ${run}`);
   await tickLabel(W, `Furnace tune-up ${run}`);
+  await tickLabel(W, `Duct repair ${run}`);
   await tickLabel(W, `EPA 608 Universal ${run}`);
   await sleep(200);
   await tickLabel(W, "Also allow them to open the original certificate file");
@@ -173,6 +218,8 @@ try {
   check("personal-information warning shown for the original certificate", pageNow.includes("Original certificates may contain personal information"));
   check("preview names the supervisor who allowed it, and honestly withholds the other name",
     preview.includes(`Sky Reviewer ${run} (fictional)`) && preview.includes("did not permit their name to be shown"));
+  check("preview shows the customer acknowledgment without the customer's name or address",
+    preview.includes("A customer acknowledged") && preview.includes("Sealed return duct") && !preview.includes("Casey") && !preview.includes(customerEmail));
   check("preview has only the selected items", preview.includes(`EPA 608 Universal ${run}`) && !preview.includes(`NATE Heat Pump ${run}`) && !preview.includes(`Older private job ${run}`) && !preview.includes(`Training course ${run}`));
   check("preview has no comments, customer details, credential numbers, summaries or equipment",
     !/Private comment|Pat Example|Fictional Lane|CRED-|born 1990|3-ton heat pump|80k BTU/.test(preview));
@@ -183,7 +230,7 @@ try {
   const { data: shareRow } = await admin.from("employer_shares").select("id, status, packet, shared_records").eq("worker_id", worker.id).single();
   const pj = JSON.stringify(shareRow.packet);
   check("share stored pending with a frozen packet of exactly the selection",
-    shareRow.status === "pending" && shareRow.packet.work.length === 2 && shareRow.packet.certifications.length === 1
+    shareRow.status === "pending" && shareRow.packet.work.length === 3 && shareRow.packet.certifications.length === 1
     && shareRow.shared_records.filter((r) => r.original).map((r) => r.id).join() === cert);
   check("stored packet has no excluded fields", pj.includes(`Sky Reviewer ${run}`) && !/Private comment|Pat Example|CRED-|summary|explanation|requirement|opportunit/.test(pj));
 
@@ -273,7 +320,7 @@ try {
 
   if (SERVER_LOG) {
     const log = readFileSync(SERVER_LOG, "utf8");
-    const leaks = [reviewerEmail, supEmail, ...sentTokens.filter(Boolean), "token=", "/object/sign/"].filter((s) => log.includes(s));
+    const leaks = [reviewerEmail, supEmail, customerEmail, ...sentTokens.filter(Boolean), "token=", "/object/sign/"].filter((s) => log.includes(s));
     check("server log has no addresses, invitation tokens or signed URLs", leaks.length === 0, leaks.length ? `${leaks.length} leak(s)` : "");
   }
 } catch (e) {

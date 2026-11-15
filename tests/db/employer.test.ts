@@ -61,16 +61,21 @@ async function supervisorConfirms(w: W, rec: string, consent?: boolean) {
   if (consent !== undefined) expect(await fn("review_record_share_consent", [w.sup, q.id, "supervisor-employer-share-v2", consent])).toMatchObject({ ok: true });
   return q.id as string;
 }
-async function customerAck(w: W, rec: string, statement: string) {
-  const req = randomUUID(), session = randomUUID();
+/** A customer confirmation through a verified session; `consent` records the separate employer-sharing permission. */
+async function customerAck(w: W, rec: string, consent: boolean, opts: { decision?: string; ageMinutes?: number } = {}) {
+  const req = randomUUID(), session = randomUUID(), sessionHash = sha(`s${req}`), tokenHash = sha(`tok${req}`);
   await db.query(
     `insert into public.signoff_requests (id, worker_id, evidence_id, evidence_version, snapshot, snapshot_hash, file_hash, customer_email, customer_name,
        token_hash, status, delivery_mode, expires_at, verified_session_id, email_verified_at)
-     values ($1,$2,$3,$4,$5,$6,'x','casey@example.test','Casey Customer',$7,'acknowledged','resend',now() + interval '7 days',$8,now())`,
-    [req, w.id, rec, await version(rec), JSON.stringify({ activities: ["Replaced contactor"] }), sha(req), sha(`tok${req}`), session]);
+     values ($1,$2,$3,$4,$5,$6,'x','casey@example.test','Casey Customer',$7,$9,'resend',now() + interval '7 days',$8,now())`,
+    [req, w.id, rec, await version(rec), JSON.stringify({ activities: ["Replaced contactor"] }), sha(req), tokenHash, session,
+     (opts.decision ?? "confirm") === "confirm" ? "acknowledged" : "declined"]);
+  await db.query("insert into public.signoff_sessions (id, request_id, session_hash, expires_at) values ($1,$2,$3,now() + interval '30 minutes')", [session, req, sessionHash]);
   await db.query(
-    `insert into public.signoff_responses (request_id, decision, typed_name, comment, statement_version, snapshot_hash, evidence_version, session_id)
-     values ($1,'confirm','Casey Typed Signature','Customer private note',$2,$3,$4,$5)`, [req, statement, sha(req), await version(rec), session]);
+    `insert into public.signoff_responses (request_id, decision, typed_name, comment, statement_version, snapshot_hash, evidence_version, session_id, created_at)
+     values ($1,$6,case when $6 = 'confirm' then 'Casey Typed Signature' end,'Customer private note','customer-ack-v1',$2,$3,$4,now() - make_interval(mins => $5))`,
+    [req, sha(req), await version(rec), session, opts.ageMinutes ?? 0, opts.decision ?? "confirm"]);
+  return { req, tokenHash, sessionHash, consent: consent ? await fn("signoff_record_share_consent", [tokenHash, sessionHash, "customer-employer-share-v1"]) : null };
 }
 async function share(w: W, email: string, items: { id: string; kind: "work" | "certification"; original?: boolean }[], days = 7) {
   const token = sha(`tok-${randomUUID()}`);
@@ -114,8 +119,8 @@ describe.skipIf(!ADMIN_URL)("employer review portal (database)", () => {
     await supervisorConfirms(w, old);
     await supervisorConfirms(w, okAnon, false);
     await supervisorConfirms(w, okNamed, true);
-    await customerAck(w, custV1, "customer-ack-v1");
-    await customerAck(w, custV2, "customer-ack-v2");
+    await customerAck(w, custV1, false);
+    expect((await customerAck(w, custV2, true)).consent).toEqual({ ok: true });
 
     const c = await fn<Cand>("employer_share_candidates", [w.id]);
     const byId = new Map(c.work.map((x) => [x.id, x]));
@@ -157,6 +162,60 @@ describe.skipIf(!ADMIN_URL)("employer review portal (database)", () => {
     expect((await fn("review_record_share_consent", [w.sup, dq.id, "v", true])).reason).toBe("not_confirmation");
     expect(await fn("review_record_share_consent", [w.sup, fresh, "v", false])).toMatchObject({ ok: true });
     await expect(db.query("update public.review_share_consents set show_name = true where request_id=$1", [fresh])).rejects.toThrow(/append-only/);
+  });
+
+  it("customer permission is separate, explicit, by the confirming session only, for confirmations only, at decision time only", async () => {
+    const w = await worker("Lou");
+    const a = await customerAck(w, await record(w), false);
+    expect((await fn("signoff_record_share_consent", [a.tokenHash, sha("some other session"), "v"])).reason).toBe("not_found");
+    expect((await fn("signoff_record_share_consent", [sha("unknown token"), a.sessionHash, "v"])).reason).toBe("not_found");
+    const declined = await customerAck(w, await record(w), false, { decision: "decline" });
+    expect((await fn("signoff_record_share_consent", [declined.tokenHash, declined.sessionHash, "v"])).reason).toBe("not_confirmation");
+    const late = await customerAck(w, await record(w), false, { ageMinutes: 20 });
+    expect((await fn("signoff_record_share_consent", [late.tokenHash, late.sessionHash, "v"])).reason).toBe("too_late");
+    expect(await fn("signoff_record_share_consent", [a.tokenHash, a.sessionHash, "v"])).toEqual({ ok: true });
+    expect(await fn("signoff_record_share_consent", [a.tokenHash, a.sessionHash, "v"])).toMatchObject({ ok: true, repeated: true });
+    await expect(db.query("delete from public.signoff_share_consents where request_id=$1", [a.req])).rejects.toThrow(/append-only/);
+    // The acknowledgment itself is untouched: same statement version as before this feature.
+    expect((await db.query("select statement_version from public.signoff_responses where request_id=$1", [a.req])).rows[0].statement_version).toBe("customer-ack-v1");
+  });
+
+  it("a supervisor's name can't be shown without permission to share: the name flag only exists inside a share permission", async () => {
+    const cols = (await db.query("select column_name from information_schema.columns where table_schema='public' and table_name='review_share_consents'")).rows.map((r) => r.column_name).sort();
+    expect(cols).toEqual(["consent_version", "created_at", "request_id", "reviewer_auth_user_id", "show_name"]);
+    const w = await worker("Ash");
+    const rec = await record(w);
+    await supervisorConfirms(w, rec); // confirmed, no permission at all
+    const c = await fn<Cand>("employer_share_candidates", [w.id]);
+    expect(c.work.find((x) => x.id === rec)).toMatchObject({ supervisor: [], withheldCount: 1 });
+  });
+
+  it("withdrawal, expiry and a different account each block a certificate download that was otherwise allowed", async () => {
+    const w = await worker("Sol");
+    const cert = await record(w, "certification", "fictional/sol.pdf");
+    const open = async (label: string) => {
+      const email = addr(label);
+      const s = await share(w, email, [{ id: cert, kind: "certification", original: true }]);
+      const r = await user(email);
+      await fn("employer_share_accept", [s.token, r]);
+      expect(await fn("employer_share_document_path", [r, s.id, cert])).toBe("fictional/sol.pdf"); // control: allowed
+      return { s, r };
+    };
+    const withdrawn = await open("withdrawn");
+    await fn("employer_share_revoke", [w.id, withdrawn.s.id]);
+    expect(await fn("employer_share_document_path", [withdrawn.r, withdrawn.s.id, cert])).toBeNull();
+
+    const expiring = await open("expiring");
+    await db.query("alter table public.employer_shares disable trigger employer_shares_frozen");
+    await db.query("update public.employer_shares set expires_at = now() - interval '1 second' where id=$1", [expiring.s.id]);
+    await db.query("alter table public.employer_shares enable trigger employer_shares_frozen");
+    expect(await fn("employer_share_document_path", [expiring.r, expiring.s.id, cert])).toBeNull();
+
+    const live = await open("live");
+    const stranger = await user(addr("stranger"));
+    expect(await fn("employer_share_document_path", [stranger, live.s.id, cert])).toBeNull();
+    expect(await fn("employer_share_document_path", [w.auth, live.s.id, cert])).toBeNull(); // not even the technician's account
+    expect(await fn("employer_share_document_path", [live.r, live.s.id, cert])).toBe("fictional/sol.pdf");
   });
 
   it("only the confirmed invited account can open; a forwarded link does nothing; no other role is granted", async () => {
@@ -235,11 +294,12 @@ describe.skipIf(!ADMIN_URL)("employer review portal (database)", () => {
     for (const role of ["anon", "authenticated"]) {
       await db.query(`set role ${role}`);
       try {
-        for (const t of ["employer_shares", "employer_share_events", "review_share_consents"]) {
+        for (const t of ["employer_shares", "employer_share_events", "review_share_consents", "signoff_share_consents"]) {
           await expect(db.query(`select * from public.${t} limit 1`)).rejects.toThrow(/permission denied/);
         }
         await expect(db.query("select public.employer_share_candidates($1)", [randomUUID()])).rejects.toThrow(/permission denied/);
         await expect(db.query("select public.employer_share_get($1,$2)", [randomUUID(), randomUUID()])).rejects.toThrow(/permission denied/);
+        await expect(db.query("select public.signoff_record_share_consent('a','b','c')")).rejects.toThrow(/permission denied/);
       } finally {
         await db.query("reset role");
       }
