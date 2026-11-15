@@ -26,6 +26,7 @@ let asWorker: { id: string; name: string; trade: string; is_synthetic: boolean }
 let signoffCookie: string | undefined;
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => (signoffCookie ? { value: signoffCookie } : undefined) }), headers: async () => new Headers() }));
 vi.mock("@/lib/server/signoff/notify", () => ({ notifyCustomerDecision: async () => undefined }));
+vi.mock("next/server", async (orig) => ({ ...(await orig<typeof import("next/server")>()), connection: async () => undefined }));
 vi.mock("@/lib/api/auth", () => ({
   getAccount: async () => current && { supabase: null, user: { id: current.id, email: current.email, emailConfirmed: current.confirmed }, worker: null, supervisor: null },
   getAuthedContext: async () => asWorker && { supabase: null, authUserId: "x", worker: asWorker },

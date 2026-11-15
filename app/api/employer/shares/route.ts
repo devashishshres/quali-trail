@@ -1,3 +1,4 @@
+import { connection } from "next/server";
 import { getAccount } from "@/lib/api/auth";
 import { employerReviewEnabled } from "@/lib/server/employer/flags";
 import { allow, guarded, json, off, rpcValue, tooMany } from "@/lib/server/signoff/service";
@@ -5,6 +6,7 @@ import { ReviewerShare } from "@/lib/types/employer";
 
 /** GET /api/employer/shares — packets opened by this account. Closed ones are listed without content. */
 async function handleGET() {
+  await connection(); // always per request: never prerender this answer, whatever the flag is at build time
   if (!employerReviewEnabled()) return off();
   const a = await getAccount();
   if (!a || !a.user.emailConfirmed) return json({ error: { code: "unauthorized", message: "Sign in with a confirmed email address." } }, 401);
