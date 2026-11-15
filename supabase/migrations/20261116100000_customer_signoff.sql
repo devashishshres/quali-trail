@@ -172,12 +172,11 @@ create trigger signoff_responses_frozen before update or delete on public.signof
 create or replace function public.evidence_supersede_signoffs()
 returns trigger language plpgsql security definer set search_path = '' as $$
 begin
-  update public.signoff_requests
-     set status = 'superseded', closed_at = now()
-   where evidence_id = new.id and status = 'pending';
-  insert into public.signoff_events (request_id, event, detail)
-    select id, 'superseded', 'evidence changed' from public.signoff_requests
-     where evidence_id = new.id and status = 'superseded' and closed_at >= now() - interval '1 second';
+  with closed as (
+    update public.signoff_requests set status = 'superseded', closed_at = now()
+     where evidence_id = new.id and status = 'pending'
+    returning id)
+  insert into public.signoff_events (request_id, event, detail) select id, 'superseded', 'evidence changed' from closed;
   return new;
 end;
 $$;
@@ -493,12 +492,12 @@ declare n integer;
 begin
   insert into public.signoff_suppressions (email_hash, reason, provider_message_id)
     values (p_email_hash, p_reason, p_message_id) on conflict (email_hash) do nothing;
-  with u as (update public.signoff_requests set status = 'revoked', closed_at = now()
-              where customer_email_hash = p_email_hash and status = 'pending' returning id)
-  select count(*) into n from u;
-  insert into public.signoff_events (request_id, event, detail)
-    select id, 'suppressed', p_reason from public.signoff_requests
-     where customer_email_hash = p_email_hash and status = 'revoked' and closed_at >= now() - interval '1 second';
+  with closed as (
+    update public.signoff_requests set status = 'revoked', closed_at = now()
+     where customer_email_hash = p_email_hash and status = 'pending'
+    returning id),
+  logged as (insert into public.signoff_events (request_id, event, detail) select id, 'suppressed', p_reason from closed returning 1)
+  select count(*) into n from logged;
   return jsonb_build_object('ok', true, 'revoked', n);
 end;
 $$;
