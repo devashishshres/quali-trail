@@ -220,7 +220,7 @@ PREVIEWS
    a) Run scripts/sql/verify-installed-schema.sql (read-only) in the SQL editor, or after linking:
         npx supabase login                                   (interactive: ! npx supabase login)
         npx supabase link --project-ref ighnwgkqvajfkhmopttg (prompts for the database password)
-        npx supabase migration list --linked
+        npx supabase migration list --remote
       It returns one row per migration: recorded_in_history, objects present/expected (135 checks: tables,
       columns, functions, triggers, indexes, policies, the evidence bucket, plus fingerprints for 20261114210000's
       function/trigger replacements and the workers.summary check), and anything missing.
@@ -230,10 +230,10 @@ PREVIEWS
         recorded and complete          -> nothing to do
         NOT recorded but complete      -> mark applied (step c)
         incomplete (any "missing")     -> STOP. Do not repair. Write and review a corrective migration.
-        recorded but no file           -> STOP. Investigate (npx supabase migration fetch --linked, read only).
+        recorded but no file           -> STOP. Investigate (npx supabase migration fetch --remote, read only).
    c) Expected repair if 20261114170000..20261115120000 are all complete and unrecorded (writes ONLY the
       history table; approval required):
-        npx supabase migration repair --linked --status applied 20261114170000 20261114170100 20261114180000 20261114210000 20261115120000
+        npx supabase migration repair --remote --status applied 20261114170000 20261114170100 20261114180000 20261114210000 20261115120000
    d) Read-only API check on 2026-11-15 (project ighnwgkqvajfkhmopttg, the URL in .env.local): all nine main
       tables with their columns (including workers.summary and evidence.version), RPCs current_worker_id,
       start/finalize/fail_match_run, and the private 10 MB PDF-only "evidence" bucket are present. No release
@@ -241,12 +241,40 @@ PREVIEWS
       through the API: that is what step a) is for.
 
 2. BACKUP (before any write)
-   The project is on the Free plan: do not rely on platform backups. After linking, dump to a folder OUTSIDE
-   the repository (contains demo account data; never commit):
-        npx supabase db dump --linked --role-only -f <backup dir>/roles.sql
-        npx supabase db dump --linked -f <backup dir>/schema.sql
-        npx supabase db dump --linked --data-only -f <backup dir>/data.sql
-   Storage objects are not touched by these migrations. Also record:
+   The project is on the Free plan: do not rely on platform backups. Needs Docker running, `npx supabase login`
+   and `npx supabase link` (with --remote and no --password the CLI uses a temporary login role, so no database
+   password is typed). This repo uses Supabase CLI ^3.1.0: target the project with --remote (--linked is
+   deprecated). Write to a private folder OUTSIDE the repository, one file per part:
+        B="$HOME/qualitrail-backups/$(date -u +%Y%m%dT%H%M%SZ)-pre-release"; mkdir -p "$B" && chmod 700 "$B"
+        npx supabase db dump --remote --role-only -f "$B/roles.sql"
+            Custom roles only. Supabase-managed roles are commented out and no passwords are included. This
+            project defines no custom roles, so a near-empty file is expected; keep it anyway.
+        npx supabase db dump --remote -f "$B/schema.sql"
+            public and other user schemas: tables, functions, triggers, policies, grants. EXCLUDES auth,
+            storage, supabase_migrations and other platform schemas.
+        npx supabase db dump --remote --data-only --use-copy -x storage.buckets_vectors -f "$B/data.sql"
+            Rows from public, auth (users, identities, password hashes, sessions) and storage (bucket settings and
+            object METADATA rows). EXCLUDES supabase_migrations. CLI 3.1.0 rejects --data-only without -x;
+            storage.buckets_vectors is an unused internal table, excluded only to satisfy that.
+        npx supabase migration list --remote > "$B/history-before.txt"
+            The recorded migration history is in none of the dumps. Versions only.
+        chmod 600 "$B"/*
+        ls -l "$B"
+            The only check: sizes, never contents. schema.sql and data.sql must be non-empty.
+   Never cat/open/paste/commit/upload these files: data.sql holds account emails and password hashes; treat it
+   like a credential. Delete the folder when it is no longer needed.
+   STORAGE LIMITATIONS
+   - No database dump contains file contents. The PDFs in the private "evidence" bucket (including Sam's two
+     certificates) exist only in Storage; data.sql has only their metadata rows. Restoring data.sql recreates
+     rows that point at files; it does not recreate the files.
+   - These three migrations do not touch storage.objects or the bucket (the new trigger runs on evidence
+     UPDATE and changes only sign-off/review rows), so the files are not at risk from this release.
+   - A file-level copy would be a separate download of the bucket with the service key into "$B/storage/".
+     That writes demo evidence PDFs to disk; it is not part of this procedure and needs its own approval.
+   - Restore limits: data.sql cannot be loaded back over the same project without conflicts. Before real use,
+     recover with scripts/sql/rollback-release-if-empty.sql; a full restore (into a fresh project) is a last
+     resort.
+   Also record:
         scripts/sql/baseline-snapshot.sql  (read-only). Values on 2026-11-15 via the API:
           Alex Morgan   5 records, version sum 5, revision 13, latest completed: 3 evidence_found, 1 needs_review
           Jordan Rivera 5 records, version sum 5, revision 10, latest completed: 3 evidence_found, 1 needs_review
@@ -254,15 +282,15 @@ PREVIEWS
                         1 no_sufficient_evidence (the reserved 2-of-4 baseline)
 
 3. DRY RUN, then APPLY (after step 1 shows 1-5 complete and recorded)
-        npx supabase db push --linked --dry-run
+        npx supabase db push --remote --dry-run
    Must list exactly, in order:
         20261116100000_customer_signoff.sql
         20261117090000_email_delivery.sql
         20261117100000_accounts_supervisor_review.sql
    (Same command run locally with main's five migrations recorded printed exactly these three and applied nothing.)
    Anything else listed: stop. Then, with approval:
-        npx supabase db push --linked
-   Never: supabase config push, db reset --linked, db push --include-all without review.
+        npx supabase db push --remote
+   Never: supabase config push, db reset --remote, db push --include-all without review.
 
    What the three migrations do:
    - 20261116100000_customer_signoff: tables signoff_requests, signoff_codes, signoff_sessions, signoff_responses,
@@ -281,7 +309,7 @@ PREVIEWS
 
 4. POST-MIGRATION CHECKS (read-only)
    - scripts/sql/verify-installed-schema.sql: all eight rows recorded_in_history = true, present = expected.
-   - npx supabase migration list --linked: local and remote columns identical for all eight.
+   - npx supabase migration list --remote: local and remote columns identical for all eight.
    - scripts/sql/baseline-snapshot.sql: identical to the values in step 2 (Sam still 2 of 4).
    - With the publishable key (anon): selecting any new table is refused; with the service key: each returns 200.
    - Dashboard -> Database -> Advisors: no new security errors.
