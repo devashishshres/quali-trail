@@ -12,7 +12,7 @@ import type { Evidence, MatchRun, Opportunity } from "@/lib/types";
 import type { RunExplanations } from "@/lib/types/explanations";
 import { resolveCandidates } from "../matching/candidates";
 import { MemorySearchError, type MemoryHit } from "../memory/types";
-import { buildModelInput, deterministicItem, plan, validateModelItems, type ModelInput, type ModelItem, type Plan } from "./analysis";
+import { buildModelInput, deterministicItem, joinClarification, plan, SEARCH_FAILED_NOTE, validateModelItems, type ModelInput, type ModelItem, type Plan } from "./analysis";
 
 export const EXPLAIN_BUDGET_MS = 90_000;
 export const SEARCH_TIMEOUT_MS = 10_000;
@@ -106,7 +106,7 @@ export async function explainRun(ports: ExplainPorts, args: { run: MatchRun; opp
       if (!searched[i].ok) {
         const it = items[i];
         it.kind = it.kind === "eligibility" ? it.kind : "ai_unavailable";
-        it.clarification = [it.clarification, "Related records couldn't be searched for this line."].filter(Boolean).join(" ");
+        it.clarification = joinClarification(plans[i].conditions, [...plans[i].notes, SEARCH_FAILED_NOTE]);
       }
     });
     return { kind: "done", explanations: await ports.save(run.id, { aiStatus, rejectedReferences, items }, model) };

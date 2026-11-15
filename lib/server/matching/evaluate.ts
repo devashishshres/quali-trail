@@ -130,17 +130,38 @@ interface ClassifyOptions {
 }
 
 /**
- * Record text for term groups: the record's HEADLINE only (title, skills, activities), minus any segment that
- * negates ("did not install"). A summary or equipment list that merely mentions a term ("startup was done by
- * another crew") is not the record stating it did that work, so it can never satisfy a scope term.
+ * Record text for term groups: the record's HEADLINE only (title, skills, activities), where the term is not negated
+ * (see affirmedMatch). A summary or equipment list that merely mentions a term ("startup was done by another crew")
+ * is not the record stating it did that work, so it can never satisfy a scope term.
  */
-function affirmedText(e: Evidence): string {
+function headlineSegments(e: Evidence): string[] {
   const d = e.structuredData;
-  const segments = [e.title, ...d.skills, ...d.activities];
-  return segments.map(norm).filter((s) => s && !/\b(?:not|never|no|without)\b/.test(s)).join(" \n ");
+  return [e.title, ...d.skills, ...d.activities];
 }
 
-const hasTerm = (text: string, term: string) => new RegExp(`\\b${escapeRe(norm(term))}(?![a-z0-9])`).test(text);
+/**
+ * Negation applies only to the work it negates, judged clause by clause (same rule as the explanation task
+ * breakdown): a negation word in the 4 words before the match ("did not install", "no residential work"), or
+ * "not/never/…n't" within 3 words after it ("startup was not performed"). "Installed residential heat pump, no leaks
+ * found" still states the installation. Contractions ("didn't", "wasn't") count as negations.
+ */
+const NEG_BEFORE = /\b(?:not|never|no|without|unable to|cannot)\b|n'?t\b/;
+const NEG_AFTER = /^(?: \S+){0,3} (?:not|never|\S+n'?t)\b/;
+const toClauses = (s: string) => norm(s.replace(/[’‘]/g, "'")).split(/[;.,:]| but | while | however | although | except /).map((c) => c.trim()).filter(Boolean);
+
+export function affirmedMatch(segments: string[], re: RegExp): boolean {
+  const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+  for (const clause of segments.flatMap(toClauses)) {
+    for (const m of clause.matchAll(g)) {
+      const before = clause.slice(0, m.index).trim().split(" ").slice(-4).join(" ");
+      const after = clause.slice(m.index! + m[0].length);
+      if (!NEG_BEFORE.test(before) && !NEG_AFTER.test(after)) return true;
+    }
+  }
+  return false;
+}
+
+const termRe = (term: string) => new RegExp(`\\b${escapeRe(norm(term))}(?![a-z0-9])`);
 
 function classify(req: Requirement, c: Candidate, today: string, opts: ClassifyOptions = {}): Verdict {
   const { criteria } = req;
@@ -203,9 +224,9 @@ function classify(req: Requirement, c: Candidate, today: string, opts: ClassifyO
   const requiresInstallAndStartup = /\bexperience\b|\bhands on\b/.test(reqNorm)
     && /\binstall/.test(reqNorm) && /\bstart/.test(reqNorm);
   if (requiresInstallAndStartup && needsActivities) {
-    const activities = e.structuredData.activities.map(norm).filter((a) => !/\b(?:not|never)\b/.test(a));
-    const installation = activities.some((a) => /\binstall(?:ed|ing|ation)?\b|\bmounted\b|\bbraz(?:ed|ing)\b|\bconnected (?:the )?(?:refrigerant|line set)/.test(a));
-    const startup = activities.some((a) => /\bstart ?up\b|\bstarted up\b|\bstarting up\b|\boperational test/.test(a));
+    const activities = e.structuredData.activities;
+    const installation = affirmedMatch(activities, /\binstall(?:ed|ing|ation)?\b|\bmounted\b|\bbraz(?:ed|ing)\b|\bconnected (?:the )?(?:refrigerant|line set)/);
+    const startup = affirmedMatch(activities, /\bstart ?up\b|\bstarted up\b|\bstarting up\b|\boperational test/);
     if (activities.length && !installation && !startup) {
       return { kind: "supporting", why: "Documents related commissioning or service checks, but does not state that installation and startup were performed." };
     }
@@ -214,9 +235,9 @@ function classify(req: Requirement, c: Candidate, today: string, opts: ClassifyO
   }
 
   if (opts.termGroups?.length) {
-    const affirmed = affirmedText(e);
+    const segments = headlineSegments(e);
     for (const group of opts.termGroups) {
-      if (!group.some((t) => hasTerm(affirmed, t))) missing.push(`"${group.length > 1 ? `${group[0]}" (or ${group.slice(1).map((t) => `"${t}"`).join(", ")})` : `${group[0]}"`}`);
+      if (!group.some((t) => affirmedMatch(segments, termRe(t)))) missing.push(`"${group.length > 1 ? `${group[0]}" (or ${group.slice(1).map((t) => `"${t}"`).join(", ")})` : `${group[0]}"`}`);
     }
   }
 

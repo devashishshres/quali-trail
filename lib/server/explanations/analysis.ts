@@ -63,11 +63,35 @@ export function stubSimilarity(query: string, e: Evidence): number {
   return [...q].some((w) => own.has(w)) ? 0.6 : 0.2;
 }
 
+/** Stored limit for `clarification` (lib/types/explanations.ts). */
+export const CLARIFICATION_MAX = 800;
+export const MORE_CONDITIONS = "The line also sets other conditions QualiTrail does not assess; ask the employer about each of them.";
+export const SEARCH_FAILED_NOTE = "Related records couldn't be searched for this line.";
+export const CONTEXT_ONLY_NOTE = "Any work records listed here are context only; they do not establish this condition.";
+
+/**
+ * Fixed clarification text that always fits the stored limit. Whole condition sentences are kept in order while they
+ * fit; if any are left out, one fixed sentence says further conditions need clarifying. Notes (context-only caveat,
+ * search failure) are always kept. Never cuts a sentence and never drops the clarification, so a long line can't
+ * make saving fail.
+ */
+export function joinClarification(conditions: string[], notes: string[] = [], max = CLARIFICATION_MAX): string | null {
+  const unique = [...new Set(conditions)];
+  const full = [...unique, ...notes].join(" ");
+  if (full.length <= max) return full || null;
+  const kept: string[] = [];
+  for (const c of unique) if ([...kept, c, MORE_CONDITIONS, ...notes].join(" ").length <= max) kept.push(c);
+  return [...kept, MORE_CONDITIONS, ...notes].join(" ");
+}
+
 export interface Plan {
   requirement: Requirement;
   mode: "eligibility" | "no_related" | "ai";
   breakdown: TaskBreakdown | null;
   clarification: string | null;
+  /** The parts `clarification` was built from, so a later note can be added without exceeding the limit. */
+  conditions: string[];
+  notes: string[];
   records: Evidence[];
 }
 
@@ -87,11 +111,11 @@ export function plan(requirement: Requirement, candidates: Candidate[]): Plan {
     .slice(0, MAX_RECORDS_PER_REQUIREMENT);
 
   if (elig.length) {
-    const caveat = breakdown ? " Any work records listed here are context only; they do not establish this condition." : "";
-    return { requirement, mode: "eligibility", breakdown, clarification: `${[...new Set(elig)].join(" ")}${caveat}`, records: breakdown ? records.filter((e) => taskIds.has(e.id)) : [] };
+    const notes = breakdown ? [CONTEXT_ONLY_NOTE] : [];
+    return { requirement, mode: "eligibility", breakdown, clarification: joinClarification(elig, notes), conditions: elig, notes, records: breakdown ? records.filter((e) => taskIds.has(e.id)) : [] };
   }
-  if (!records.length) return { requirement, mode: "no_related", breakdown, clarification: null, records: [] };
-  return { requirement, mode: "ai", breakdown, clarification: null, records };
+  if (!records.length) return { requirement, mode: "no_related", breakdown, clarification: null, conditions: [], notes: [], records: [] };
+  return { requirement, mode: "ai", breakdown, clarification: null, conditions: [], notes: [], records };
 }
 
 /* ------------------------------------------------------------------ */

@@ -172,6 +172,40 @@ describe("explainRun", () => {
     expect(calls.propose).toHaveLength(0);
     expect(x.items.map((i) => i.kind)).toEqual(["no_related", "eligibility", "no_related"]);
   });
+
+  // Regression: a line with many eligibility conditions produced a clarification longer than the stored limit, so
+  // saving threw, the row was marked failed and every later request was refused as "exhausted".
+  describe("a line with many eligibility conditions", () => {
+    const many = [
+      req("3+ years of HVAC experience, valid driver's license with a clean driving record, able to lift 50 lbs and work in attics, high school diploma or GED, must pass a background check and drug screen, authorized to work in the US, weekend on-call availability"),
+      req("Must have 3+ years experience, valid driver's licence, able to lift 50 lbs, high school diploma, pass background check, no felony convictions"),
+    ];
+    const opp = { ...opportunity, requirements: many } as unknown as Opportunity;
+    const manyRun = () => ({ ...run(), results: many.map((q) => ({ requirementId: q.id, originalText: q.originalText, mandatory: true, assessment: "cannot_assess", connections: [], explanation: "x", uncertainties: [], missingDocumentation: [] })) }) as MatchRun;
+
+    it("is saved within the stored limits instead of failing the run", async () => {
+      const { ports, calls } = fakePorts();
+      const out = await explainRun(ports, { run: manyRun(), opportunity: opp, evidence });
+      expect(out.kind).toBe("done");
+      expect(calls.failed).toEqual([]);
+      const x = (out as { explanations: RunExplanations }).explanations;
+      for (const it of x.items) {
+        expect(it.kind).toBe("eligibility");
+        expect(it.clarification!.length).toBeLessThanOrEqual(800);
+        expect(it.clarification).toMatch(/employer/);
+      }
+    });
+
+    it("still fits when the search for that line also failed", async () => {
+      const { ports, calls } = fakePorts({ search: async (q) => (/felony/.test(q) ? Promise.reject(new MemorySearchError("down")) : []) });
+      const out = await explainRun(ports, { run: manyRun(), opportunity: opp, evidence });
+      expect(out.kind).toBe("done");
+      expect(calls.failed).toEqual([]);
+      const it2 = (out as { explanations: RunExplanations }).explanations.items[1];
+      expect(it2.clarification!.length).toBeLessThanOrEqual(800);
+      expect(it2.clarification).toMatch(/couldn't be searched/);
+    });
+  });
 });
 
 describe("reading a stored explanation (cache per run and record versions)", async () => {

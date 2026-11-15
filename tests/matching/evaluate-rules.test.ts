@@ -103,6 +103,39 @@ describe("supported rules", () => {
     expect(run(req, [c({ ...notInstalled, verificationStatus: "document_supplied" })]).assessment).not.toBe("evidence_found");
   });
 
+  // Regression: any "no/not/never/without" anywhere in an activity used to discard the WHOLE activity, so valid work
+  // with an unrelated negation ("no leaks", "never needed a callback") stopped counting.
+  describe("negation applies only to the work it negates", () => {
+    const docd = (activities: string[], title = "Fictional service job") => ev({ type: "work_record", verificationStatus: "document_supplied", title, data: { activities } });
+
+    it.each([
+      ["Installed residential heat pump, no leaks found"],
+      ["Installed residential heat pump with no leaks"],
+      ["Installed residential heat pump without any callbacks"],
+    ])("scope term still stated: %s", (activity) => {
+      expect(run(imported("Residential heat pump installation experience"), [c(docd([activity]))]).assessment).toBe("evidence_found");
+    });
+
+    it("startup still documented when the same activity says a callback was never needed", () => {
+      const r = docd(["Installed heat pump", "Started up heat pump, never needed a callback"], "Heat pump install and startup");
+      expect(run(imported("Heat pump installation and startup experience"), [c(r)]).assessment).toBe("evidence_found");
+    });
+
+    it.each([
+      ["Did not install residential heat pump; inspection only"],
+      ["Didn't install the residential heat pump, inspection only"],
+      ["Residential heat pump was not installed"],
+      ["No residential heat pump work"],
+    ])("negated work still never counts: %s", (activity) => {
+      expect(run(imported("Residential heat pump installation experience"), [c(docd([activity], "Fictional visit"))]).assessment).not.toBe("evidence_found");
+    });
+
+    it("negated startup still missing even when installation is affirmed", () => {
+      const r = docd(["Installed heat pump", "Startup wasn't performed, done later"], "Heat pump install");
+      expect(run(imported("Heat pump installation and startup experience"), [c(r)]).assessment).not.toBe("evidence_found");
+    });
+  });
+
   it("a record links once even when it serves two parts", () => {
     const both = ev({ type: "work_record", verificationStatus: "document_supplied", title: "Heat pump install and startup", data: { activities: ["Installed heat pump", "Started up heat pump"] } });
     const out = run(imported("Heat pump installation and startup experience"), [c(both)]);
