@@ -193,4 +193,166 @@ Release: accounts, completed jobs, customer sign-off, supervisor review (draft P
 - Three migrations (20261116100000, 20261117090000, 20261117100000) are NOT applied to the development project or any hosted project. Read the recorded migration history first.
 - Verified only on disposable infrastructure: docker Postgres (database tests) and an isolated local Supabase stack (integration tests and scripts/e2e-local.mjs browser journeys). Gemini and Supermemory were not used locally.
 - No real email, no hosted accounts, no DNS, Auth or hosting changes. Alex, Jordan and Sam untouched; Sam stays at 2 of 4.
-- Next steps needing approval: see docs/release-accounts-signoff-review.md, "Proposed external setup" and "Hosted acceptance checklist".
+- Next steps needing approval: the RELEASE CHECKLIST below. (docs/*.md is git-ignored by the project's Markdown rule; this file is the tracked copy.)
+
+
+RELEASE CHECKLIST: accounts, completed jobs, customer sign-off, supervisor review
+==============================================================================
+Every step that touches a hosted service needs separate approval. Keep SIGNOFF_ENABLED and
+SUPERVISOR_REVIEW_ENABLED false until hosted acceptance testing passes. Sam Okafor (rehearsal-2) stays at 2 of 4.
+
+STATE (2026-11-15)
+- PRs #6 -> #7 -> #8 -> #9, merge in that order; none merged. Top revision is PR #9's head.
+- Checks on the final code: 299 automated tests (disposable Postgres + isolated local Supabase), typecheck, lint,
+  production build; scripts/e2e-local.mjs 95/95; scripts/e2e-degraded.mjs 16/16 (flags off, release tables absent).
+- Not verified: anything hosted, real Resend delivery/webhooks, Gemini/Supermemory with this release.
+
+PREVIEWS
+- vercel.json (on every PR branch): git.deploymentEnabled {"feature/*": false}. Checked with minimatch against the
+  actual remote branches: all four PR branches match (skipped); main, docs/*, fix/*, feat/*, replace-main do not.
+  A nested name like feature/a/b would NOT match. The rule only applies to commits that contain vercel.json.
+- After pushing, no Vercel status appeared on any PR head. That is evidence, not proof: confirm in Vercel ->
+  Deployments (filter by branch) that nothing newer than 2026-11-15 07:07 UTC exists for these branches.
+- Older previews of PRs #6-#9 still exist behind Vercel login until deleted (needs approval).
+
+1. RECONCILE MIGRATION HISTORY (read-only first; do NOT db push yet)
+   All five migrations on main were installed through the SQL editor, so the CLI history is probably empty.
+   a) Run scripts/sql/verify-installed-schema.sql (read-only) in the SQL editor, or after linking:
+        npx supabase login                                   (interactive: ! npx supabase login)
+        npx supabase link --project-ref ighnwgkqvajfkhmopttg (prompts for the database password)
+        npx supabase migration list --linked
+      It returns one row per migration: recorded_in_history, objects present/expected (135 checks: tables,
+      columns, functions, triggers, indexes, policies, the evidence bucket, plus fingerprints for 20261114210000's
+      function/trigger replacements and the workers.summary check), and anything missing.
+      Validated locally against: main only, a partial install missing 20261114210000, the full release, and a
+      history gap.
+   b) Decide per row:
+        recorded and complete          -> nothing to do
+        NOT recorded but complete      -> mark applied (step c)
+        incomplete (any "missing")     -> STOP. Do not repair. Write and review a corrective migration.
+        recorded but no file           -> STOP. Investigate (npx supabase migration fetch --linked, read only).
+   c) Expected repair if 20261114170000..20261115120000 are all complete and unrecorded (writes ONLY the
+      history table; approval required):
+        npx supabase migration repair --linked --status applied 20261114170000 20261114170100 20261114180000 20261114210000 20261115120000
+   d) Read-only API check on 2026-11-15 (project ighnwgkqvajfkhmopttg, the URL in .env.local): all nine main
+      tables with their columns (including workers.summary and evidence.version), RPCs current_worker_id,
+      start/finalize/fail_match_run, and the private 10 MB PDF-only "evidence" bucket are present. No release
+      table, and no workers.employment_arrangement. Triggers, policies, indexes and history are NOT visible
+      through the API: that is what step a) is for.
+
+2. BACKUP (before any write)
+   The project is on the Free plan: do not rely on platform backups. After linking, dump to a folder OUTSIDE
+   the repository (contains demo account data; never commit):
+        npx supabase db dump --linked --role-only -f <backup dir>/roles.sql
+        npx supabase db dump --linked -f <backup dir>/schema.sql
+        npx supabase db dump --linked --data-only -f <backup dir>/data.sql
+   Storage objects are not touched by these migrations. Also record:
+        scripts/sql/baseline-snapshot.sql  (read-only). Values on 2026-11-15 via the API:
+          Alex Morgan   5 records, version sum 5, revision 13, latest completed: 3 evidence_found, 1 needs_review
+          Jordan Rivera 5 records, version sum 5, revision 10, latest completed: 3 evidence_found, 1 needs_review
+          Sam Okafor    4 records, version sum 4, revision 8,  latest completed: 2 evidence_found, 1 needs_review,
+                        1 no_sufficient_evidence (the reserved 2-of-4 baseline)
+
+3. DRY RUN, then APPLY (after step 1 shows 1-5 complete and recorded)
+        npx supabase db push --linked --dry-run
+   Must list exactly, in order:
+        20261116100000_customer_signoff.sql
+        20261117090000_email_delivery.sql
+        20261117100000_accounts_supervisor_review.sql
+   (Same command run locally with main's five migrations recorded printed exactly these three and applied nothing.)
+   Anything else listed: stop. Then, with approval:
+        npx supabase db push --linked
+   Never: supabase config push, db reset --linked, db push --include-all without review.
+
+   What the three migrations do:
+   - 20261116100000_customer_signoff: tables signoff_requests, signoff_codes, signoff_sessions, signoff_responses,
+     signoff_events, signoff_rate_limits, signoff_suppressions (RLS on, no client grants); service-role-only
+     functions signoff_*; freeze triggers on requests/responses; AFTER UPDATE trigger evidence_supersede_signoffs
+     on public.evidence (closes open requests when a record changes; changes no evidence data). Foreign keys to
+     workers/evidence are ON DELETE RESTRICT: once a request exists, that record can't be deleted (no app route
+     deletes evidence today).
+   - 20261117090000_email_delivery: tables email_deliveries (no addresses or bodies), email_webhook_events;
+     service-role-only email_* functions.
+   - 20261117100000_accounts_supervisor_review: nullable workers.employment_arrangement (no default, no rewrite);
+     tables supervisor_profiles (RLS: read own row only), supervisor_relationships, review_requests,
+     review_responses, review_events; account_*, sup_*, review_* functions (service role only); replaces
+     evidence_supersede_signoffs so edits also close open review requests.
+   None rewrites existing rows; Alex, Jordan and Sam are unchanged.
+
+4. POST-MIGRATION CHECKS (read-only)
+   - scripts/sql/verify-installed-schema.sql: all eight rows recorded_in_history = true, present = expected.
+   - npx supabase migration list --linked: local and remote columns identical for all eight.
+   - scripts/sql/baseline-snapshot.sql: identical to the values in step 2 (Sam still 2 of 4).
+   - With the publishable key (anon): selecting any new table is refused; with the service key: each returns 200.
+   - Dashboard -> Database -> Advisors: no new security errors.
+   - Existing production site, flags off: Alex signs in; Passport, My Evidence, Reports load.
+
+   RECOVERY
+   - Before any real use: scripts/sql/rollback-release-if-empty.sql removes exactly the release's objects and its
+     three history rows in one transaction, and REFUSES if any opt-out, acknowledgment, review, relationship or
+     delivery row exists. Tested locally: rollback, then re-apply with the CLI, then refusal with one row present.
+   - After real use: fix forward with a new migration. Never drop populated acknowledgment/review tables.
+   - Full restore from the step 2 dump is a last resort and needs approval.
+
+5. MERGE  #6 -> #7 -> #8 -> #9, flags off. Production redeploys from main.
+
+6. SUPABASE AUTH (Dashboard -> Authentication)
+   - URL Configuration: Site URL https://<app>
+     Redirect URLs: https://<app>/auth/confirm  and  https://<app>/auth/confirm?*   (local: http://localhost:3100/**)
+   - Email provider: Confirm email ON (verified on 2026-11-15), Secure email change ON, minimum password length 10,
+     "Allow new users to sign up" ON (verified ON; the app's sign-up uses this public endpoint).
+   - Sign-up limits: anyone with the publishable key can create a bare Auth account directly; it gets no profile
+     and no data access. A Before User Created hook would stop that (separate change, not built).
+   - SMTP (after step 8): host smtp.resend.com, port 465, username resend, password = the Supabase-only Resend key,
+     sender no-reply@<sub>, name QualiTrail. Then raise Rate Limits -> emails sent per hour.
+
+7. SENDING DOMAIN (GoDaddy; nothing chosen or bought yet)
+   Resend -> Domains -> add <sub> (e.g. mail.<domain>). Copy Resend's records into GoDaddy DNS exactly; typically
+   MX send.mail -> feedback-smtp.<region>.amazonses.com (priority 10), TXT send.mail "v=spf1 include:amazonses.com ~all",
+   TXT resend._domainkey.mail (DKIM value). Add TXT _dmarc "v=DMARC1; p=none; rua=mailto:<reporting address>".
+   Wait for Verified.
+
+8. RESEND
+   - Two API keys, "Sending access", limited to <sub>: one for the app (RESEND_API_KEY), one for Supabase SMTP.
+   - Webhook https://<app>/api/webhooks/resend, events email.delivered, email.delivery_delayed, email.bounced,
+     email.complained, email.failed; signing secret -> RESEND_WEBHOOK_SECRET.
+
+9. VERCEL -> Settings -> Environment Variables (Production)
+     NEXT_PUBLIC_DATA_MODE=live
+     NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY   (rotated values)
+     GEMINI_API_KEY, GEMINI_MODEL, GEMINI_FALLBACK_MODELS                                  (key rotated)
+     SUPERMEMORY_API_KEY, SUPERMEMORY_NAMESPACE_PREFIX                                     (key rotated)
+     SIGNOFF_PEPPER=<openssl rand -base64 48>   required always, >= 32 chars; never change once in use
+     APP_BASE_URL=https://<app>
+     SIGNUP_MODE=allowlist  SIGNUP_ALLOWLIST=<approved addresses or @domains>
+     SIGNOFF_ENABLED=false  SUPERVISOR_REVIEW_ENABLED=false  EMAIL_MODE=off
+     RESEND_API_KEY, RESEND_WEBHOOK_SECRET, RESEND_FROM="QualiTrail <no-reply@<sub>>"
+   Server log after redeploy: no "[config]" problem line. EMAIL_MODE=mock is refused on Vercel by design.
+
+10. ROTATE the credentials pasted into chat (Supabase secret key, Gemini, Supermemory, demo password); update
+    step 9; redeploy.
+
+11. TURN ON one at a time, with inboxes you control: EMAIL_MODE=resend -> sign-up and password-reset tests ->
+    SIGNOFF_ENABLED=true -> customer tests -> SUPERVISOR_REVIEW_ENABLED=true -> supervisor tests.
+
+12. RETENTION (pg_cron, approval required)
+      select cron.schedule('qualitrail-purge', '15 3 * * *',
+        $$select public.signoff_purge_pii(90); select public.sup_purge_pii(90); select public.email_purge_old(30);$$);
+
+HOSTED ACCEPTANCE (fictional identities; real inboxes you control)
+- Alex, Jordan, Sam sign in unchanged; Sam stays 2 of 4.
+- Allowlisted sign-up: real email from <sub>, link confirms, onboarding works; non-allowlisted gets no account email.
+- Forgot password: link works once, in the requesting browser; reused link says expired; other sessions signed out.
+- Invited supervisor can't create a technician profile; forwarded invitation refused for another account.
+- Log a job with and without a PDF; both index and match.
+- Customer: copied link shows only the gate; one code; wrong code fails; acknowledgment recorded; receipt arrives;
+  label "Customer acknowledged ... not independently verified".
+- Bounce test address: webhook suppresses it; a second request to it is refused.
+- Supervisor: PDF not shared by default; opt-in shares it; confirm one observed task; end the connection: pending
+  closes, completed stays, shared PDF no longer opens.
+- Edit a record with an acknowledgment and a review: both "Changed since...", open requests close, report goes stale.
+- Packet: no customer address or typed signature.
+- Headers: X-Frame-Options DENY and frame-ancestors 'none'. Rate limits keyed per real client address.
+- Server logs: no address, code, token or message body; no "[config]" problems.
+- Each flag off: new activity stops, completed records stay visible.
+
