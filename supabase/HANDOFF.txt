@@ -132,3 +132,13 @@ Submission checklist (items marked USER need your action)
 
 If snapshot sharing is added later
 A saved match-run id alone does not freeze anything: explanation text is stored, but title, date, type, verification and issuer are read live from the evidence row; evidence can be edited in place (the version bump marks runs stale but the old content is gone); original files can be replaced or removed. A real share would need a snapshot written at share time (evidence metadata, version and file hash, plus copies of originals at snapshot-specific storage paths), shown as superseded after later edits, and deleted when the worker deletes the evidence or revokes the share.
+
+
+REHEARSAL-1 RESULT (development project ighnwgkqvajfkhmopttg, 2026-11-14)
+------------------------------------------------------------------------
+- The workers.summary migration was applied by the user and verified (column present).
+- Seeded and indexed fictional worker Jordan Rivera (slug rehearsal-1; 10 rows, 4 records indexed in Supermemory). ID isolation was checked before writing: no overlap with Alex Morgan's fixed ids; Alex still has 5 evidence records.
+- Browser journey (headless Chrome, production build on port 3100): Passport shows the summary; baseline run = 2 evidence found, 1 needs review, 1 no sufficient evidence; checklist upload -> Gemini extraction -> review -> confirm -> indexed (5 records searchable); earlier runs became stale; second run = 3 evidence found, 1 needs review (installation/startup), 0 no sufficient evidence; "what changed" box showed the commissioning requirement moving to evidence found; packet shows the summary (labelled the worker's own, not verified), issuer column and verification labels; no console errors or failed requests (the only 404s were the expected "no run yet" lookups before the first run).
+- A first scripted attempt did not save the checklist because the test script navigated away before the save finished (a script bug, not an app failure). No duplicate or partial record resulted.
+- rehearsal-1 is now consumed (3 of 4). Create rehearsal-2 for judging with the commands in README.md ("Rehearsal workers already used").
+- Migration-history repair is still pending: the recorded versions must be read through a database or CLI connection first.

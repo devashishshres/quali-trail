@@ -92,6 +92,16 @@ DEMO_WORKER_SLUG=rehearsal-1 DEMO_WORKER_NAME="Jordan Rivera" npm run seed:index
 
 Use a new slug for every rehearsal; nothing needs deleting or resetting.
 
+**Rehearsal workers already used in the development project.** `rehearsal-1` (Jordan Rivera) has had the commissioning checklist uploaded, so it now shows 3 of 4 and uploading the same file again is detected as a duplicate. Do not reuse it for a 2-of-4 start. For judging or another rehearsal, create a fresh one (this needs the `workers.summary` migration applied first):
+
+```bash
+DEMO_WORKER_SLUG=rehearsal-2 DEMO_WORKER_NAME="Sam Okafor" \
+DEMO_USER_EMAIL=sam.okafor@demo.qualitrail.dev npm run seed:demo
+DEMO_WORKER_SLUG=rehearsal-2 DEMO_WORKER_NAME="Sam Okafor" npm run seed:index
+```
+
+Sign in with that email and the shared demo password from your local environment. Each new slug (`rehearsal-3`, ...) needs its own name and email address.
+
 ### Demo runbook: 2 of 4, then 3 of 4
 
 1. Sign in as the rehearsal worker. Passport shows four historical records and the technician summary.
